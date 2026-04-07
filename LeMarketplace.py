@@ -62,17 +62,25 @@ st.markdown("""
 # --- CONEXÃO COM GOOGLE SHEETS ---
 @st.cache_resource
 def conectar_google_sheets():
-    # Caminho do arquivo JSON de credenciais
-    path_json = r'C:\Users\Junior\Desktop\CodigosPython2\leandro-marketplace-db68edb58be7.json'
+    # LINHA ORIGINAL MANTIDA (COMENTADA PARA NÃO DAR ERRO NA NUVEM)
+    # path_json = r'C:\Users\Junior\Desktop\CodigosPython2\leandro-marketplace-db68edb58be7.json'
+    
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
     try:
-        creds = ServiceAccountCredentials.from_json_keyfile_name(path_json, scope)
+        # LOGICA PARA DEPLOY (BUSCA O ARQUIVO NA RAIZ DO GITHUB OU SECRETS)
+        if "gcp_service_account" in st.secrets:
+            creds_dict = st.secrets["gcp_service_account"]
+            creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
+        else:
+            # Tenta ler o arquivo json que você subiu no GitHub
+            creds = ServiceAccountCredentials.from_json_keyfile_name('leandro-marketplace-db68edb58be7.json', scope)
+            
         client = gspread.authorize(creds)
-        # ID da planilha Google Sheets
         sheet_id = "1sWBnF83-z6yrEKxWoJ1IulHNkwSEU6Si6WzNuLxqW44"
         return client.open_by_key(sheet_id)
     except Exception as e:
-        print(f"Erro na conexão com o Google Sheets: {e}")
+        # Mostra o erro na tela para você saber o que houve (BI Style)
+        st.error(f"Erro na conexão com o Google Sheets: {e}")
         return None
 
 # --- FUNÇÃO DE CONVERSÃO DE MOEDA ---
@@ -82,7 +90,6 @@ def converter_custo_seguro(valor_raw):
     if ',' not in s and '.' not in s:
         try:
             val = float(s)
-            # Lógica simples para tratar valores que podem vir em centavos
             return val / 100 if val > 1000 else val
         except: return 0.0
     if ',' in s:
@@ -99,14 +106,12 @@ def calcular_venda_completo(custo_aquisicao, margem_percentual, mkt):
     
     if mkt == "shein":
         comissao_mkt, taxa_extra = 0.18, 5.0 # Comissão 18% + Taxa Extra R$ 5,00
-        # Fórmula para preço de venda: P = (Custo_Aquisicao + Custo_Fixo + Taxa_Extra) / (1 - (Comissao + Imposto + Margem))
         divisor = 1 - (comissao_mkt + imposto_tax + margem_alvo)
         preco = (custo_aquisicao + custo_fixo_invisivel + taxa_extra) / divisor if divisor > 0 else 0
         lucro = preco - (preco * comissao_mkt) - (preco * imposto_tax) - custo_aquisicao - custo_fixo_invisivel - taxa_extra
         return preco, lucro
     
     elif mkt == "shopee":
-        # Lógica de taxas da Shopee baseada no custo
         taxa_plat = 4.0 if custo_aquisicao < 50 else 20.0 
         comis_mkt = 0.20 if custo_aquisicao < 50 else 0.14 # Comissão varia
         divisor = 1 - (comis_mkt + imposto_tax + margem_alvo)
@@ -115,7 +120,6 @@ def calcular_venda_completo(custo_aquisicao, margem_percentual, mkt):
         return preco, lucro
 
     elif mkt == "temu":
-        # Temu com comissão 0%, apenas imposto e margem
         divisor = 1 - (imposto_tax + margem_alvo)
         preco = (custo_aquisicao + custo_fixo_invisivel) / divisor if divisor > 0 else 0
         lucro = preco - (preco * imposto_tax) - custo_aquisicao - custo_fixo_invisivel
@@ -145,12 +149,11 @@ with st.sidebar:
         if st.button("Entrar no Painel", type="primary"):
             if u == "leandro" and p == "123":
                 st.session_state.logado = True
-                st.session_state.pg = "Calculadora" # Redireciona para o painel restrito
+                st.session_state.pg = "Calculadora" 
                 st.rerun()
             else:
                 st.error("Usuário ou senha incorretos.")
     else:
-        # Menus da Área Logada
         st.subheader(f"👋 Olá, {st.session_state.logado if isinstance(st.session_state.logado, str) else 'Admin'}")
         if st.button("📊 Comparativo de Preços"): st.session_state.pg = "Calculadora"
         if st.button("📝 Novo Item na Base"): st.session_state.pg = "Cadastro"
@@ -165,7 +168,8 @@ planilha = conectar_google_sheets()
 
 # --- CONTEÚDO PÚBLICO (SEM LOGIN) ---
 if st.session_state.pg == "Início":
-    # CAMINHO DA IMAGEM ALTERADO PARA LOCAL CONFORME SOLICITADO
+    # AJUSTE PARA DEPLOY: CAMINHO LOCAL COMENTADO
+    # st.image(r"C:\Users\Junior\Desktop\CodigosPython2\banner_inicio.jpg", use_container_width=True)
     st.image("banner_inicio.jpg", use_container_width=True)
     
     st.markdown("<h1 style='text-align: center;'>Bem-vindo à D.L Online Store</h1>", unsafe_allow_html=True)
@@ -200,7 +204,6 @@ elif st.session_state.pg == "Serviços":
 elif st.session_state.pg == "Contato":
     st.header("✉️ Central de Atendimento")
     
-    # WHATSAPP COM ÍCONE E LINK CLICÁVEL
     whatsapp_url = "https://wa.me/5511960501826"
     st.markdown(f"""
         <a href="{whatsapp_url}" target="_blank" style="text-decoration: none;">
@@ -213,7 +216,6 @@ elif st.session_state.pg == "Contato":
     
     st.divider()
     st.subheader("Formulário de Suporte / Sugestão")
-    st.write("Para outras dúvidas, e-mails comerciais ou feedback, use o formulário abaixo que gera um e-mail pronto.")
     
     with st.form("form_contato"):
         nome = st.text_input("Seu Nome")
@@ -229,7 +231,6 @@ elif st.session_state.pg == "Contato":
                 assunto = f"{tipo}: {produto} - {nome}"
                 corpo = f"Nome: {nome}\nProduto: {produto}\n\nMensagem:\n{mensagem}"
                 
-                # Encode para URL
                 assunto_enc = urllib.parse.quote(assunto)
                 corpo_enc = urllib.parse.quote(corpo)
                 mailto_link = f"mailto:{email_destino}?subject={assunto_enc}&body={corpo_enc}"
@@ -245,24 +246,16 @@ if st.session_state.logado and planilha:
     if st.session_state.pg == "Calculadora":
         st.header("📊 Comparativo de Preços (Unitário)")
         
-        if not planilha:
-            st.error("Erro na conexão com o Google Sheets. Verifique o console ou tente novamente.")
-            st.stop()
-            
         lista_dfs = []
         for a in ["shein", "shopee", "temu"]:
             try:
                 d = pd.DataFrame(planilha.worksheet(a).get_all_records())
                 if not d.empty: 
-                    # Filtra apenas as colunas necessárias para o seletor
                     lista_dfs.append(d[['Produto', 'Custo_aquisicao']])
             except: pass
         
         if lista_dfs:
-            # Consolida todos os produtos para a busca
             df_geral = pd.concat(lista_dfs).drop_duplicates(subset=['Produto'])
-            
-            # Placeholder e index=None permitem que o usuário digite para buscar
             prod_sel = st.selectbox("Selecione ou Digite o Produto", df_geral['Produto'].unique(), index=None, placeholder="Digite o nome do produto...")
             
             if prod_sel:
@@ -270,7 +263,6 @@ if st.session_state.logado and planilha:
                 custo_aq = converter_custo_seguro(row['Custo_aquisicao'])
                 margem_input = st.number_input("Margem de Lucro Desejada (%)", min_value=1.0, value=2.0, step=1.0)
                 
-                # Executa os cálculos para cada marketplace
                 p_shein, l_shein = calcular_venda_completo(custo_aq, margem_input, "shein")
                 p_shopee, l_shopee = calcular_venda_completo(custo_aq, margem_input, "shopee")
                 p_temu, l_temu = calcular_venda_completo(custo_aq, margem_input, "temu")
@@ -279,7 +271,6 @@ if st.session_state.logado and planilha:
                 st.subheader(f"Análise de Preços Sugeridos: {prod_sel}")
                 st.metric("Custo de Aquisição Base", f"R$ {custo_aq:.2f}")
                 
-                # Monta a tabela de resultados com a coluna de Custo Unitário adicionada
                 res = {
                     "Canal": ["SHEIN", "SHOPEE", "TEMU"],
                     "Custo Unitário": [f"R$ {custo_aq:.2f}", f"R$ {custo_aq:.2f}", f"R$ {custo_aq:.2f}"],
@@ -290,11 +281,6 @@ if st.session_state.logado and planilha:
 
     elif st.session_state.pg == "Relatórios":
         st.header("📈 Relatório de Vendas")
-        
-        if not planilha:
-            st.error("Erro na conexão com o Google Sheets.")
-            st.stop()
-            
         lista_rel = []
         for a in ["shein", "shopee", "temu"]:
             try: 
@@ -305,10 +291,8 @@ if st.session_state.logado and planilha:
         
         if lista_rel:
             df_rel = pd.concat(lista_rel).drop_duplicates(subset=['Produto'])
-            
             c1, c2, c3 = st.columns(3)
             with c1:
-                # Selectbox configurado para permitir digitação/busca
                 prod_v = st.selectbox("Selecione o Produto", df_rel['Produto'].unique(), index=None, placeholder="Buscar produto...")
                 qtd_v = st.number_input("Quantidade Vendida", min_value=1, value=1)
             with c2:
@@ -316,56 +300,40 @@ if st.session_state.logado and planilha:
                 vlr_un = st.number_input("Preço de Venda Praticado (Unitário)", min_value=0.01)
             
             if st.button("Calcular Lucro Real da Venda", type="primary") and prod_v:
-                # Lógica de cálculo do lucro real baseada na venda praticada
                 it = df_rel[df_rel['Produto'] == prod_v].iloc[0]
                 c_aq = converter_custo_seguro(it['Custo_aquisicao'])
-                
                 faturamento = vlr_un * qtd_v
-                # Inclui custo de aquisição e custo operacional
                 custos_totais = (c_aq + 1.00) * qtd_v 
-                imposto = faturamento * 0.06 # 6% fixo
+                imposto = faturamento * 0.06 
                 
-                # Taxas baseadas nas regras de cada marketplace
                 if mkt_v == "shein": 
                     taxas = (faturamento * 0.18) + (5 * qtd_v)
                 elif mkt_v == "shopee":
-                    # Regra simples da Shopee baseada no valor unitário
                     taxas = (faturamento * 0.20 + 4 * qtd_v) if vlr_un <= 79.99 else (faturamento * 0.14 + 20 * qtd_v)
                 else: 
-                    taxas = 0 # Temu 0% de taxas
+                    taxas = 0 
                 
                 lucro_final = faturamento - custos_totais - taxas - imposto
-                
                 st.divider()
                 st.subheader(f"Resultado Financeiro Real: {prod_v}")
                 r1, r2, r3, r4 = st.columns(4)
                 r1.metric("Faturamento Total", f"R$ {faturamento:.2f}")
                 r2.metric("Custo + Operacional", f"R$ {custos_totais:.2f}")
                 r3.metric("Taxas + Impostos", f"R$ {taxas + imposto:.2f}")
-                
-                # Margem percentual
                 margem_real = ((lucro_final / faturamento) * 100) if faturamento > 0 else 0
                 r4.metric("Lucro Líquido Real", f"R$ {lucro_final:.2f}", delta=f"{margem_real:.1f}%")
 
     elif st.session_state.pg == "Cadastro":
         st.header("📝 Novo Item na Base")
-        
-        if not planilha:
-            st.error("Erro na conexão com o Google Sheets.")
-            st.stop()
-            
         with st.form("cad_final"):
             st.markdown("### Preencha as informações do novo produto")
             m = st.selectbox("Selecione o Marketplace", ["shein", "shopee", "temu"])
             n = st.text_input("Nome Completo do Produto")
-            s = st.text_input("SKU / Referência Interna") # SKU incluído
+            s = st.text_input("SKU / Referência Interna")
             c = st.number_input("Custo Unitário de Aquisição (R$)", min_value=0.01)
             
             if st.form_submit_button("Salvar na Planilha", type="primary"):
-                # Validação simples
                 if n and s:
-                    # Envia os dados para a aba correspondente na planilha Google
-                    # Salva Nome, SKU e Custo (formatado com vírgula para o Sheets)
                     planilha.worksheet(m).append_row([n, s, str(c).replace('.', ',')])
                     st.success(f"Sucesso! Produto '{n}' salvo na base {m.upper()}.")
                 else:
