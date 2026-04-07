@@ -5,6 +5,7 @@ from oauth2client.service_account import ServiceAccountCredentials
 import re
 import urllib.parse
 import json
+import os
 
 # --- CONFIGURAÇÕES DE PÁGINA ---
 st.set_page_config(page_title="Leandro Marketplace", layout="wide", initial_sidebar_state="expanded")
@@ -190,9 +191,17 @@ planilha = conectar_google_sheets()
 
 # --- CONTEÚDO PÚBLICO (SEM LOGIN) ---
 if st.session_state.pg == "Início":
-    # CAMINHO DA IMAGEM ALTERADO PARA LOCAL CONFORME SOLICITADO
-    st.image(r"C:\Users\Junior\Desktop\CodigosPython2\banner_inicio.jpg", use_container_width=True)
+    # 1. DEFINE OS CAMINHOS
+    caminho_local = r"C:\Users\Junior\Desktop\CodigosPython2\banner_inicio.jpg"
+    nome_arquivo = "banner_inicio.jpg"
+
+    # 2. LOGICA DA IMAGEM (HIBRIDA)
+    if os.path.exists(caminho_local):
+        st.image(caminho_local, use_container_width=True)
+    else:
+        st.image(nome_arquivo, use_container_width=True)
     
+    # 3. TEXTOS (FORA DO IF/ELSE DA IMAGEM PARA APARECER SEMPRE)
     st.markdown("<h1 style='text-align: center;'>Bem-vindo à D.L Online Store</h1>", unsafe_allow_html=True)
     st.write("")
     
