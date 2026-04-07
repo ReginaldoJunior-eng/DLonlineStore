@@ -4,6 +4,7 @@ import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 import re
 import urllib.parse
+import os
 
 # --- CONFIGURAÇÕES DE PÁGINA ---
 st.set_page_config(page_title="Leandro Marketplace", layout="wide", initial_sidebar_state="expanded")
@@ -62,24 +63,24 @@ st.markdown("""
 # --- CONEXÃO COM GOOGLE SHEETS ---
 @st.cache_resource
 def conectar_google_sheets():
-    # LINHA ORIGINAL MANTIDA (COMENTADA PARA NÃO DAR ERRO NA NUVEM)
-    # path_json = r'C:\Users\Junior\Desktop\CodigosPython2\leandro-marketplace-db68edb58be7.json'
-    
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
     try:
-        # LOGICA PARA DEPLOY (BUSCA O ARQUIVO NA RAIZ DO GITHUB OU SECRETS)
+        # Tenta carregar dos Secrets (Streamlit Cloud) para evitar erro de Padding
         if "gcp_service_account" in st.secrets:
-            creds_dict = st.secrets["gcp_service_account"]
+            creds_dict = dict(st.secrets["gcp_service_account"])
+            # Garante que as quebras de linha da private_key sejam lidas corretamente
+            if "private_key" in creds_dict:
+                creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
             creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
         else:
-            # Tenta ler o arquivo json que você subiu no GitHub
-            creds = ServiceAccountCredentials.from_json_keyfile_name('leandro-marketplace-db68edb58be7.json', scope)
+            # Caminho local para desenvolvimento
+            path_json = r'C:\Users\Junior\Desktop\CodigosPython2\leandro-marketplace-db68edb58be7.json'
+            creds = ServiceAccountCredentials.from_json_keyfile_name(path_json, scope)
             
         client = gspread.authorize(creds)
         sheet_id = "1sWBnF83-z6yrEKxWoJ1IulHNkwSEU6Si6WzNuLxqW44"
         return client.open_by_key(sheet_id)
     except Exception as e:
-        # Mostra o erro na tela para você saber o que houve (BI Style)
         st.error(f"Erro na conexão com o Google Sheets: {e}")
         return None
 
@@ -168,9 +169,13 @@ planilha = conectar_google_sheets()
 
 # --- CONTEÚDO PÚBLICO (SEM LOGIN) ---
 if st.session_state.pg == "Início":
-    # AJUSTE PARA DEPLOY: CAMINHO LOCAL COMENTADO
-    # st.image(r"C:\Users\Junior\Desktop\CodigosPython2\banner_inicio.jpg", use_container_width=True)
-    st.image("banner_inicio.jpg", use_container_width=True)
+    # Lógica para carregar imagem local ou na nuvem sem erro
+    banner_path = r"C:\Users\Junior\Desktop\CodigosPython2\banner_inicio.jpg"
+    if os.path.exists(banner_path):
+        st.image(banner_path, use_container_width=True)
+    else:
+        # Se não achar o caminho C:, tenta carregar o arquivo direto da pasta do projeto
+        st.image("banner_inicio.jpg", use_container_width=True)
     
     st.markdown("<h1 style='text-align: center;'>Bem-vindo à D.L Online Store</h1>", unsafe_allow_html=True)
     st.write("")
@@ -216,6 +221,7 @@ elif st.session_state.pg == "Contato":
     
     st.divider()
     st.subheader("Formulário de Suporte / Sugestão")
+    st.write("Para outras dúvidas, e-mails comerciais ou feedback, use o formulário abaixo que gera um e-mail pronto.")
     
     with st.form("form_contato"):
         nome = st.text_input("Seu Nome")
@@ -329,7 +335,7 @@ if st.session_state.logado and planilha:
             st.markdown("### Preencha as informações do novo produto")
             m = st.selectbox("Selecione o Marketplace", ["shein", "shopee", "temu"])
             n = st.text_input("Nome Completo do Produto")
-            s = st.text_input("SKU / Referência Interna")
+            s = st.text_input("SKU / Referência Interna") 
             c = st.number_input("Custo Unitário de Aquisição (R$)", min_value=0.01)
             
             if st.form_submit_button("Salvar na Planilha", type="primary"):
