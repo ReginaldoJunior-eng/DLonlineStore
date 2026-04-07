@@ -80,16 +80,24 @@ def conectar_google_sheets():
         info = None
 
     # 2. SE NÃO CONSEGUIU PELOS SECRETS, TENTA O ARQUIVO LOCAL (MODO DESENVOLVIMENTO)
+# 2. SE NÃO CONSEGUIU PELOS SECRETS, TENTA O ARQUIVO LOCAL
     if info is None:
         try:
             path_json = r'C:\Users\Junior\Desktop\CodigosPython2\.streamlit\secrets.toml.json'
-            with open(path_json, 'r') as f:
-                info = json.load(f)
-                # Garante que a chave privada funcione independente de como foi salva
-                info['private_key'] = info['private_key'].replace('\\n', '\n')
-        except FileNotFoundError:
-            st.error("Erro: Arquivo JSON local não encontrado e Secrets da nuvem ausentes.")
+            if os.path.exists(path_json):
+                with open(path_json, 'r') as f:
+                    info = json.load(f)
+            else:
+                st.error("Arquivo JSON local não encontrado e Secrets da nuvem ausentes.")
+                return None
+        except Exception as e:
+            st.error(f"Erro ao ler o arquivo local: {e}")
             return None
+
+    # 3. LIMPEZA DA CHAVE (Sempre execute isso antes de autenticar)
+    if info and 'private_key' in info:
+        # O .strip() remove espaços invisíveis que causam o erro de Base64
+        info['private_key'] = info['private_key'].replace('\\n', '\n').strip()
 
     # 3. AUTENTICAÇÃO FINAL
     try:
