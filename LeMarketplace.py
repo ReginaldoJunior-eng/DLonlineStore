@@ -66,55 +66,41 @@ st.markdown("""
 def conectar_google_sheets():
     import json
     import os
+    import base64
     from google.oauth2 import service_account
     
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
     sheet_id = "1sWBnF83-z6yrEKxWoJ1IulHNkwSEU6Si6WzNuLxqW44"
     info = None
 
-    # --- 1. TENTA NUVEM (COM CHECAGEM DE SEGURANÇA) ---
+    # --- 1. TENTA NUVEM ---
     try:
-        if os.path.exists(".streamlit/secrets.toml") or os.environ.get("STREAMLIT_RUNTIME_ENV_REMOTE") == "true":
-            if "gcp_service_account" in st.secrets:
-                info = dict(st.secrets["gcp_service_account"])
-    except Exception:
+        if "gcp_service_account" in st.secrets:
+            info = dict(st.secrets["gcp_service_account"])
+            # SE A CHAVE ESTIVER EM BASE64, ELE DECODIFICA. SE NÃO, USA NORMAL.
+            if 'private_key' in info and "BEGIN" not in info['private_key']:
+                decoded_key = base64.b64decode(info['private_key']).decode("utf-8")
+                info['private_key'] = decoded_key
+            elif 'private_key' in info:
+                info['private_key'] = info['private_key'].replace('\\n', '\n').strip()
+    except:
         info = None
 
-    # --- 2. TENTA LOCAL (SE NÃO ACHOU NA NUVEM) ---
+    # --- 2. TENTA LOCAL ---
     if info is None:
         path_json = r'C:\Users\Junior\Desktop\CodigosPython2\.streamlit\secrets.toml.json'
         if os.path.exists(path_json):
-            try:
-                with open(path_json, 'r', encoding='utf-8') as f:
-                    info = json.load(f)
-            except Exception as e:
-                st.error(f"Erro ao ler arquivo JSON local: {e}")
-                return None
-        else:
-            st.error("Configurações não encontradas. Verifique se o arquivo JSON está na pasta .streamlit")
-            return None
+            with open(path_json, 'r', encoding='utf-8') as f:
+                info = json.load(f)
 
-    # --- 3. AUTENTICAÇÃO (MÉTODO MODERNO COM LIMPEZA PROFUNDA) ---
+    # --- 3. AUTENTICAÇÃO ---
     if info:
         try:
-            if 'private_key' in info:
-                # LIMPEZA "PENTE FINO" CONTRA ERRO PEM (INVALID BYTE)
-                pk = info['private_key']
-                pk = pk.replace('\\n', '\n')    # Converte quebras de linha de texto para reais
-                pk = pk.replace('.', '')         # REMOVE PONTOS (Causa do erro InvalidByte 46)
-                pk = pk.replace('"', '')         # REMOVE ASPAS DUPLAS extras
-                pk = pk.strip()                  # REMOVE ESPAÇOS no início e fim
-                info['private_key'] = pk
-            
-            # Autentica usando a biblioteca moderna do Google
             creds = service_account.Credentials.from_service_account_info(info, scopes=scope)
             client = gspread.authorize(creds)
             return client.open_by_key(sheet_id)
         except Exception as e:
-            # Se der erro aqui, ele vai mostrar exatamente o que sobrou na chave
             st.error(f"Erro na autenticação final: {e}")
-            return None
-    
     return None
 
 # --- FUNÇÃO DE CONVERSÃO DE MOEDA ---
