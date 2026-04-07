@@ -1,2 +1,0 @@
-*.json
-leandro-marketplace-db68edb58be7.json
