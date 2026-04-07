@@ -64,47 +64,57 @@ st.markdown("""
 # --- CONEXÃO COM GOOGLE SHEETS (HÍBRIDA BLINDADA) ---
 @st.cache_resource(ttl=600)
 def conectar_google_sheets():
+    import json
+    import os
+    from google.oauth2 import service_account
+    
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
     sheet_id = "1sWBnF83-z6yrEKxWoJ1IulHNkwSEU6Si6WzNuLxqW44"
     info = None
 
-    # --- 1. TENTA NUVEM (STREAMLIT SECRETS) ---
+    # --- 1. TENTA NUVEM (COM CHECAGEM DE SEGURANÇA) ---
+    # Só tenta ler st.secrets se estivermos no Streamlit Cloud ou se o arquivo existir
     try:
-        if "gcp_service_account" in st.secrets:
-            # Converte o objeto do Streamlit em um dicionário comum do Python
-            info = dict(st.secrets["gcp_service_account"])
+        # Verifica se estamos no servidor ou se o arquivo de segredos existe localmente
+        if os.path.exists(".streamlit/secrets.toml") or os.environ.get("STREAMLIT_RUNTIME_ENV_REMOTE") == "true":
+            if "gcp_service_account" in st.secrets:
+                info = dict(st.secrets["gcp_service_account"])
     except Exception:
         info = None
 
     # --- 2. TENTA LOCAL (SE NÃO ACHOU NA NUVEM) ---
     if info is None:
+        # Caminho exato que você confirmou que funciona
         path_json = r'C:\Users\Junior\Desktop\CodigosPython2\.streamlit\secrets.toml.json'
+        
         if os.path.exists(path_json):
             try:
-                with open(path_json, 'r') as f:
+                with open(path_json, 'r', encoding='utf-8') as f:
                     info = json.load(f)
             except Exception as e:
                 st.error(f"Erro ao ler arquivo JSON local: {e}")
                 return None
         else:
-            # Se chegou aqui e não tem info, nada foi encontrado
-            st.error("Configurações não encontradas (Secrets ausentes e arquivo local não detectado).")
+            st.error("Configurações não encontradas. Verifique se o arquivo JSON está na pasta .streamlit")
             return None
 
-    # --- 3. LIMPEZA E AUTENTICAÇÃO (O SEGREDO ESTÁ AQUI) ---
-    try:
-        if info and isinstance(info, dict):
-            # Limpeza da Private Key para evitar erro de Base64 e Bit Stream
+    # --- 3. AUTENTICAÇÃO (MÉTODO MODERNO) ---
+    if info:
+        try:
+            # Limpeza profunda da chave privada
             if 'private_key' in info:
+                # Remove \n literais e garante quebras de linha reais
                 info['private_key'] = info['private_key'].replace('\\n', '\n').strip()
             
-            # USAMOS SEMPRE from_json_keyfile_dict pois 'info' já é o conteúdo carregado
-            creds = ServiceAccountCredentials.from_json_keyfile_dict(info, scope)
+            # Autentica usando a biblioteca mais nova do Google
+            creds = service_account.Credentials.from_service_account_info(info, scopes=scope)
             client = gspread.authorize(creds)
             return client.open_by_key(sheet_id)
-    except Exception as e:
-        st.error(f"Erro na autenticação final: {e}")
-        return None
+        except Exception as e:
+            st.error(f"Erro na autenticação final: {e}")
+            return None
+    
+    return None
 
 # --- FUNÇÃO DE CONVERSÃO DE MOEDA ---
 def converter_custo_seguro(valor_raw):
