@@ -166,7 +166,7 @@ planilha = conectar_google_sheets()
 # --- CONTEÚDO PÚBLICO (SEM LOGIN) ---
 if st.session_state.pg == "Início":
     # CAMINHO DA IMAGEM ALTERADO PARA LOCAL CONFORME SOLICITADO
-    st.image(r"C:\Users\Junior\Desktop\CodigosPython2\banner_inicio.jpg", use_container_width=True)
+    st.image("banner_inicio.jpg", use_container_width=True)
     
     st.markdown("<h1 style='text-align: center;'>Bem-vindo à D.L Online Store</h1>", unsafe_allow_html=True)
     st.write("")
