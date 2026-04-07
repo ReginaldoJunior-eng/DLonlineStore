@@ -68,45 +68,42 @@ def conectar_google_sheets():
     sheet_id = "1sWBnF83-z6yrEKxWoJ1IulHNkwSEU6Si6WzNuLxqW44"
     info = None
 
-    # 1. TENTA PEGAR DOS SECRETS (MODO NUVEM)
+    # --- 1. TENTA NUVEM (STREAMLIT SECRETS) ---
     try:
         if "gcp_service_account" in st.secrets:
-            # Se encontrar, transforma em dicionário comum
+            # Converte o objeto do Streamlit em um dicionário comum do Python
             info = dict(st.secrets["gcp_service_account"])
-            if 'private_key' in info:
-                info['private_key'] = info['private_key'].replace('\\n', '\n')
     except Exception:
-        # Se der erro de "No secrets found", ele ignora e segue para o plano B
         info = None
 
-    # 2. SE NÃO CONSEGUIU PELOS SECRETS, TENTA O ARQUIVO LOCAL (MODO DESENVOLVIMENTO)
-# 2. SE NÃO CONSEGUIU PELOS SECRETS, TENTA O ARQUIVO LOCAL
+    # --- 2. TENTA LOCAL (SE NÃO ACHOU NA NUVEM) ---
     if info is None:
-        try:
-            path_json = r'C:\Users\Junior\Desktop\CodigosPython2\.streamlit\secrets.toml.json'
-            if os.path.exists(path_json):
+        path_json = r'C:\Users\Junior\Desktop\CodigosPython2\.streamlit\secrets.toml.json'
+        if os.path.exists(path_json):
+            try:
                 with open(path_json, 'r') as f:
                     info = json.load(f)
-            else:
-                st.error("Arquivo JSON local não encontrado e Secrets da nuvem ausentes.")
+            except Exception as e:
+                st.error(f"Erro ao ler arquivo JSON local: {e}")
                 return None
-        except Exception as e:
-            st.error(f"Erro ao ler o arquivo local: {e}")
+        else:
+            # Se chegou aqui e não tem info, nada foi encontrado
+            st.error("Configurações não encontradas (Secrets ausentes e arquivo local não detectado).")
             return None
 
-    # 3. LIMPEZA DA CHAVE (Sempre execute isso antes de autenticar)
-    if info and 'private_key' in info:
-        # O .strip() remove espaços invisíveis que causam o erro de Base64
-        info['private_key'] = info['private_key'].replace('\\n', '\n').strip()
-
-    # 3. AUTENTICAÇÃO FINAL
+    # --- 3. LIMPEZA E AUTENTICAÇÃO (O SEGREDO ESTÁ AQUI) ---
     try:
-        if info:
+        if info and isinstance(info, dict):
+            # Limpeza da Private Key para evitar erro de Base64 e Bit Stream
+            if 'private_key' in info:
+                info['private_key'] = info['private_key'].replace('\\n', '\n').strip()
+            
+            # USAMOS SEMPRE from_json_keyfile_dict pois 'info' já é o conteúdo carregado
             creds = ServiceAccountCredentials.from_json_keyfile_dict(info, scope)
             client = gspread.authorize(creds)
             return client.open_by_key(sheet_id)
     except Exception as e:
-        st.error(f"Erro na autenticação com Google: {e}")
+        st.error(f"Erro na autenticação final: {e}")
         return None
 
 # --- FUNÇÃO DE CONVERSÃO DE MOEDA ---
