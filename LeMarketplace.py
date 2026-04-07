@@ -73,9 +73,7 @@ def conectar_google_sheets():
     info = None
 
     # --- 1. TENTA NUVEM (COM CHECAGEM DE SEGURANÇA) ---
-    # Só tenta ler st.secrets se estivermos no Streamlit Cloud ou se o arquivo existir
     try:
-        # Verifica se estamos no servidor ou se o arquivo de segredos existe localmente
         if os.path.exists(".streamlit/secrets.toml") or os.environ.get("STREAMLIT_RUNTIME_ENV_REMOTE") == "true":
             if "gcp_service_account" in st.secrets:
                 info = dict(st.secrets["gcp_service_account"])
@@ -84,9 +82,7 @@ def conectar_google_sheets():
 
     # --- 2. TENTA LOCAL (SE NÃO ACHOU NA NUVEM) ---
     if info is None:
-        # Caminho exato que você confirmou que funciona
         path_json = r'C:\Users\Junior\Desktop\CodigosPython2\.streamlit\secrets.toml.json'
-        
         if os.path.exists(path_json):
             try:
                 with open(path_json, 'r', encoding='utf-8') as f:
@@ -98,19 +94,24 @@ def conectar_google_sheets():
             st.error("Configurações não encontradas. Verifique se o arquivo JSON está na pasta .streamlit")
             return None
 
-    # --- 3. AUTENTICAÇÃO (MÉTODO MODERNO) ---
+    # --- 3. AUTENTICAÇÃO (MÉTODO MODERNO COM LIMPEZA PROFUNDA) ---
     if info:
         try:
-            # Limpeza profunda da chave privada
             if 'private_key' in info:
-                # Remove \n literais e garante quebras de linha reais
-                info['private_key'] = info['private_key'].replace('\\n', '\n').strip()
+                # LIMPEZA "PENTE FINO" CONTRA ERRO PEM (INVALID BYTE)
+                pk = info['private_key']
+                pk = pk.replace('\\n', '\n')    # Converte quebras de linha de texto para reais
+                pk = pk.replace('.', '')         # REMOVE PONTOS (Causa do erro InvalidByte 46)
+                pk = pk.replace('"', '')         # REMOVE ASPAS DUPLAS extras
+                pk = pk.strip()                  # REMOVE ESPAÇOS no início e fim
+                info['private_key'] = pk
             
-            # Autentica usando a biblioteca mais nova do Google
+            # Autentica usando a biblioteca moderna do Google
             creds = service_account.Credentials.from_service_account_info(info, scopes=scope)
             client = gspread.authorize(creds)
             return client.open_by_key(sheet_id)
         except Exception as e:
+            # Se der erro aqui, ele vai mostrar exatamente o que sobrou na chave
             st.error(f"Erro na autenticação final: {e}")
             return None
     
