@@ -1,0 +1,13 @@
+{
+  "type": "service_account",
+  "project_id": "leandro-marketplace",
+  "private_key_id": "db68edb58be7d9d5bf5abbfeea92faf6c1af3bf4",
+  "private_key": "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQDpC4IfsKAJjVa8\n9JVf7ZwgngFJvoYWp2S9zQxbnuYtLKU0k4n0u28wxwciV26+1TiJyXB8Cp+PfU8J\n5qzbJsTJDXGIlDI+WI6jidFXhfYNik11iaJ+ACSPT5/1Q+F9engqXTq1vFBfsVOF\nXsbwvFqOusuY6ectiybJP2Osoi5JLzYTUgQvArxs8/nev3PkF3IAnESUb10ElZld\nR4ytSmSKVkre3I9/paQdSjgqL1rsN7ZqfxjF/8LHoBH/SWaKy7Gqj5KUTEnDzEPk\n9h/AohG9MbnVbz2YySpYXDrge6e8QTZXTryAoBpRN6uUoFgnF9R0lnY0uraeXklZ\naIJnarebAgMBAAECggEAa4pKfVoxt8a3wJFzPuW0lt6jBIc9dEXBuM5fBgaQ/Eau\nY9Ezp7I40L7/XUsQiVJ2eSryU+NJF1uBdjWzDZxZ0dd4zUhp2Rhfljr6VhO05DGu\npe8iA1gIhvN9Ap7U9uTlf9MuzP997XK0coa2cg/REC1F16YUbpFYkCTG17qtdkpH\n+WCY6xH50SQEUq0Ph5Hm1Vx1K61F8w5D0fIn+yy4rv2a+8CYZdYIVs9lk9YAJQSL\naComQADGN8h1IiIsRgS2GOFpHPkgez7tVD/sDuzf7E8EmjxetLlp+ZTuABrSwWYt\nwDCYQvqlrB/yb0OSYFH+e28A6v3YU6CsCdPWC5dzOQKBgQD7eZtBElOyssD34GIi\nfp8WQY475o9JV5x1W+/XldBEHY3L3+K8fHBHTRvLnJDV/FsAsE+WMIC0NJMuqYvr\nLmdmsHt8TbMyiL0MNynxHzSGlDQCvdtE3QpKrW6byV/1U4cAu8rUGjj1IAo3vpR0\nggN3ZgljYUW1Nb3siQovUVYYGQKBgQDtPQFw+cIoLcn60FD/8RHcopBO/v2in8Dh\nMspi6Ed8jiHqVQ4LsJ3urGKu37Co5U8dHsG2ZXmE3eZaLEoFdK+p16J6wmuwiRb5\nllkAc5l1+I0XIOpALSlizlvgTbrA9EN0NONVSJPcIRFcdnTXGLYXa77ftNqrrA7R\n2p/v6GMT0wKBgQDApNb/kWeW5IMZIMZswG1kolGwp54qxDfyW7yvfW/vTmiavuc2\nF2n35SUe5NC7bLfWHjrJxlxCMGhz/aRXRNQngZkHj4pwcvnHytaRhaM6WXxCgWjh\nJyfEL3olU630BMnOEQ5/T5tEhQfuzktxuUuogv08KX86I3JcKlsoBnoauQKBgHSD\noMCWuae4DVn0k8OP50DgSlWx4GnNYhJ4OnPnNqzStY98JIDTRk2hNnpCfGYG8RsR\nLvxgzBTYUrj4xYX2cAvPTwpRkEhMnA8Kqz2QiM8qukigrsvEIm5XgUIhitYXYUWi\ncABDu/LB/t/Vgb7ecRgBn+YI0di8kS653BEcpgRnAoGAGXevMqdharTUEonmZ3PG\nK5un4gxSS6dHt0mSLVq/bSESozTcnHtQSP4XsjF90IytDuZiFOIkYPUQD0X8JCbT\nC75Nz/PEEe/JDbUMRfsoFQtz57rv/YmxnK4CnnUoS0ojcK395kKiru30HDW1aUbZ\nQiGLUawbVp5eOSCRIdHby6U=\n-----END PRIVATE KEY-----\n",
+  "client_email": "site-vendedor@leandro-marketplace.iam.gserviceaccount.com",
+  "client_id": "110153688414026548028",
+  "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+  "token_uri": "https://oauth2.googleapis.com/token",
+  "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+  "client_x509_cert_url": "https://www.googleapis.com/robot/v1/metadata/x509/site-vendedor%40leandro-marketplace.iam.gserviceaccount.com",
+  "universe_domain": "googleapis.com"
+}
