@@ -645,5 +645,5 @@ if st.session_state.logado and planilha:
                     st.markdown('</div>', unsafe_allow_html=True)
                 st.markdown('</div>', unsafe_allow_html=True)
                 
-            else: st.info("Sem vendas registradas.")
+            else: st.info("Nenhuma venda registrada ainda.")
         except Exception as e: st.warning(f"Erro ao carregar dados: {e}")
