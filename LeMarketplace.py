@@ -179,8 +179,11 @@ planilha = conectar_google_sheets()
 # --- PÁGINA INÍCIO ---
 if st.session_state.pg == "Início":
     caminho_local = r"C:\Users\Junior\Desktop\CodigosPython2\banner_inicio.jpg"
+    # PRIORIDADE: Primeiro checa o local, se não existir (Web), usa o arquivo do GitHub
     if os.path.exists(caminho_local):
         st.image(caminho_local, use_container_width=True)
+    elif os.path.exists("banner_inicio.jpg"):
+        st.image("banner_inicio.jpg", use_container_width=True)
     else:
         st.image("https://images.unsplash.com/photo-1556742049-0cfed4f6a45d?auto=format&fit=crop&w=1000&q=80", use_container_width=True)
     
@@ -352,10 +355,7 @@ if st.session_state.logado and planilha:
                             v_data = st.date_input("Data", value=datetime.now())
                         with c_v3:
                             st.write("Cálculo de Lucro")
-                            # Cálculo automático do lucro baseado no motor de custos
-                            # Usamos a margem reversa: (Preço Venda / Preço Sugerido) para achar o lucro real
-                            # Mas para simplificar e ser exato, calculamos o lucro direto:
-                            # Lucro = Preço - (Preço*Comissao) - (Preço*Imposto) - Custo - Taxas
+                            # Motor de cálculo automático
                             imposto_v = 0.06
                             custo_op_v = 1.00
                             if mkt_venda == "shein":
