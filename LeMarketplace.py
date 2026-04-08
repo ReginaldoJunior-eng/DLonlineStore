@@ -9,6 +9,7 @@ import os
 import io
 import base64
 from datetime import datetime
+import plotly.graph_objects as go # Importando Plotly
 
 # --- CONFIGURAÇÕES DE PÁGINA ---
 st.set_page_config(page_title="Leandro Marketplace", layout="wide", initial_sidebar_state="expanded")
@@ -20,6 +21,48 @@ st.markdown("""
     [data-testid="stSidebar"] { background-color: #f8f9fa !important; border-right: 1px solid #e6e6e6; }
     h1, h2, h3, p, span, label, .stMarkdown { color: #31333F !important; }
     
+    /* Borda sutil nas tabelas padrão */
+    .stTable, [data-testid="stTable"] {
+        border: 1px solid #f0f0f0 !important;
+        border-radius: 10px !important;
+        overflow: hidden !important;
+    }
+
+    /* Borda sutil nos containers de gráficos/cards */
+    .plot-container {
+        border: 1px solid #e6e6e6 !important; 
+        border-radius: 12px !important;
+        padding: 15px !important;
+        background-color: #ffffff !important;
+        box-shadow: 0px 2px 4px rgba(0,0,0,0.05);
+    }
+
+    /* ESTILO DA TABELA DE HISTÓRICO (LATERAIS, ZEBRA, HOVER E SCROLL) */
+    .historico-scroll-container {
+        border: 1px solid #e6e6e6 !important; /* Bordas laterais e completas */
+        border-radius: 10px !important;
+        max-height: 800px !important; /* Altura aproximada para 20 itens */
+        overflow-y: auto !important; /* Barra de rolagem se exceder */
+        background-color: white;
+    }
+    
+    .linha-historico {
+        padding: 8px 15px;
+        border-bottom: 1px solid #f0f0f0;
+        transition: background-color 0.2s;
+        display: flex;
+        align-items: center;
+    }
+    
+    /* Efeito Zebra: cores alternadas */
+    .linha-historico:nth-child(odd) { background-color: #ffffff; }
+    .linha-historico:nth-child(even) { background-color: #f9f9f9; }
+    
+    /* Efeito Hover: cor ao passar o mouse */
+    .linha-historico:hover {
+        background-color: #FFF9E6 !important;
+    }
+
     section[data-testid="stSidebar"] .stButton button {
         width: 100% !important;
         border-radius: 10px !important;
@@ -179,7 +222,6 @@ planilha = conectar_google_sheets()
 # --- PÁGINA INÍCIO ---
 if st.session_state.pg == "Início":
     caminho_local = r"C:\Users\Junior\Desktop\CodigosPython2\banner_inicio.jpg"
-    # PRIORIDADE: Primeiro checa o local, se não existir (Web), usa o arquivo do GitHub
     if os.path.exists(caminho_local):
         st.image(caminho_local, use_container_width=True)
     elif os.path.exists("banner_inicio.jpg"):
@@ -327,65 +369,52 @@ if st.session_state.logado and planilha:
                 df_dash = df_base_completa.copy()
                 df_dash['Custo_num'] = df_dash['Custo_aquisicao'].apply(converter_custo_seguro)
                 
-                # Seleção Dupla Validada
                 col_p1, col_p2 = st.columns(2)
                 with col_p1:
                     v_prod_sel = st.selectbox("Pesquisar por Nome", sorted(df_dash['Produto'].unique()), index=None, placeholder="Busque o Produto...")
                 with col_p2:
                     v_sku_sel = st.selectbox("Pesquisar por SKU", sorted(df_dash['SKU'].unique()), index=None, placeholder="Busque o SKU...")
                 
-                # Validação Cruzada
                 item_venda = None
                 if v_sku_sel: item_venda = df_dash[df_dash['SKU'] == v_sku_sel].iloc[0]
                 elif v_prod_sel: item_venda = df_dash[df_dash['Produto'] == v_prod_sel].iloc[0]
 
                 if item_venda is not None:
-                    v_nome_final = item_venda['Produto']
-                    v_sku_final = item_venda['SKU']
-                    v_custo_base = item_venda['Custo_num']
-                    st.success(f"✅ Item: **{v_nome_final}** | SKU: **{v_sku_final}** | Custo: R$ {v_custo_base:.2f}")
+                    v_nome_final, v_sku_final, v_custo_base = item_venda['Produto'], item_venda['SKU'], item_venda['Custo_num']
+                    st.success(f"✅ Item: **{v_nome_final}** | SKU: **{v_sku_final}** | Custo Base: R$ {v_custo_base:.2f}")
 
-                    with st.form("form_venda_auto"):
-                        c_v1, c_v2, c_v3 = st.columns(3)
-                        with c_v1:
-                            mkt_venda = st.selectbox("Marketplace da Venda", ["shein", "shopee", "temu"])
-                            v_qtd = st.number_input("Qtd", min_value=1, value=1)
-                        with c_v2:
-                            v_preco_venda = st.number_input("Preço de Venda (R$)", min_value=0.01, step=0.01)
-                            v_data = st.date_input("Data", value=datetime.now())
-                        with c_v3:
-                            st.write("Cálculo de Lucro")
-                            # Motor de cálculo automático
-                            imposto_v = 0.06
-                            custo_op_v = 1.00
-                            if mkt_venda == "shein":
-                                com, tax = 0.18, 5.0
-                                lucro_un = v_preco_venda - (v_preco_venda * com) - (v_preco_venda * imposto_v) - v_custo_base - custo_op_v - tax
-                            elif mkt_venda == "shopee":
-                                tax = 4.0 if v_custo_base < 50 else 20.0
-                                com = 0.20 if v_custo_base < 50 else 0.14
-                                lucro_un = v_preco_venda - (v_preco_venda * com) - (v_preco_venda * imposto_v) - v_custo_base - custo_op_v - tax
-                            else: # temu
-                                lucro_un = v_preco_venda - (v_preco_venda * imposto_v) - v_custo_base - custo_op_v
-                            
-                            st.metric("Lucro Líquido Unit.", f"R$ {lucro_un:.2f}")
+                    c_v1, c_v2, c_v3 = st.columns(3)
+                    with c_v1:
+                        mkt_venda = st.selectbox("Canal de Venda", ["shein", "shopee", "temu"])
+                        v_qtd = st.number_input("Qtd Vendida", min_value=1, value=1)
+                    with c_v2:
+                        v_preco_venda = st.number_input("Preço de Venda Praticado (R$)", min_value=0.01, step=0.01)
+                        v_margem_manual = st.number_input("Margem de Lucro Obtida (%)", min_value=0.1, value=2.0, step=0.1)
+                    with c_v3:
+                        v_data = st.date_input("Data da Venda", value=datetime.now())
+                        lucro_un_calc = v_preco_venda * (v_margem_manual / 100)
+                        lucro_total_dinamico = lucro_un_calc * v_qtd
+                        st.metric("Lucro Estimado Total", f"R$ {lucro_total_dinamico:.2f}")
 
-                        if st.form_submit_button("Confirmar e Salvar Venda", type="primary"):
-                            try:
-                                aba_vendas = planilha.worksheet("vendas_realizadas")
-                                lucro_total = lucro_un * v_qtd
-                                data_str = v_data.strftime("%d/%m/%Y")
-                                aba_vendas.append_row([v_nome_final, v_sku_final, str(v_preco_venda).replace('.',','), v_qtd, data_str, str(lucro_total).replace('.',',')])
-                                st.success(f"Venda de {v_sku_final} registrada com R$ {lucro_total:.2f} de lucro!")
-                                st.rerun()
-                            except:
-                                st.error("Erro: Verifique a aba 'vendas_realizadas'.")
-            else:
-                st.warning("Nenhum produto cadastrado para seleção.")
+                    if st.button("🚀 Confirmar e Registrar Venda", type="primary"):
+                        try:
+                            aba_vendas = planilha.worksheet("vendas_realizadas")
+                            data_str = v_data.strftime("%d/%m/%Y")
+                            aba_vendas.append_row([
+                                v_nome_final, v_sku_final, str(v_preco_venda).replace('.',','), 
+                                int(v_qtd), data_str, str(round(lucro_total_dinamico,2)).replace('.',',')
+                            ])
+                            st.cache_resource.clear()
+                            st.success(f"Venda registrada!")
+                            st.rerun()
+                        except Exception as e: st.error(f"Erro: {e}")
+            else: st.warning("Nenhum produto cadastrado.")
 
+        # --- SEÇÃO DO GRÁFICO ---
         st.divider()
         try:
-            dados_vendas = planilha.worksheet("vendas_realizadas").get_all_values()
+            aba_inst_vendas = planilha.worksheet("vendas_realizadas")
+            dados_vendas = aba_inst_vendas.get_all_values()
             if len(dados_vendas) > 1:
                 df_vendas = pd.DataFrame(dados_vendas[1:], columns=dados_vendas[0])
                 df_vendas['Preço Venda'] = df_vendas['Preço Venda'].apply(converter_custo_seguro)
@@ -395,20 +424,77 @@ if st.session_state.logado and planilha:
                 df_vendas['Data'] = pd.to_datetime(df_vendas['Data'], dayfirst=True)
                 
                 df_diario = df_vendas.groupby('Data').agg({'Faturamento': 'sum', 'Lucro Total': 'sum'}).reset_index()
-                df_diario['Data_Label'] = df_diario['Data'].dt.strftime('%d/%m')
                 df_diario['Outros Custos'] = df_diario['Faturamento'] - df_diario['Lucro Total']
+                df_diario = df_diario.sort_values(by='Data')
+                df_diario['Data_Label'] = df_diario['Data'].dt.strftime('%d/%m')
 
                 st.subheader("📈 Faturamento vs Lucro Líquido (Por Dia)")
-                chart_data = df_diario.set_index('Data_Label')[['Lucro Total', 'Outros Custos']]
-                st.bar_chart(chart_data, color=["#FFD700", "#31333F"])
-                st.caption("🟡 Lucro Líquido | ⚫ Custos e Impostos")
 
+                # Container com Borda Real para o Gráfico
+                with st.container():
+                    st.markdown('<div class="plot-container">', unsafe_allow_html=True)
+                    fig = go.Figure()
+                    fig.add_trace(go.Bar(
+                        x=df_diario['Data_Label'], y=df_diario['Outros Custos'], name='Outros Custos',
+                        marker_color='#FFF9E6', hovertemplate='<b>Outros Custos</b><br>Data: %{x}<br>Valor: R$ %{y:,.2f}<extra></extra>'
+                    ))
+                    fig.add_trace(go.Bar(
+                        x=df_diario['Data_Label'], y=df_diario['Lucro Total'], name='Lucro Líquido',
+                        marker_color='#FFD700', hovertemplate='<b>Lucro Líquido</b><br>Data: %{x}<br>Valor: R$ %{y:,.2f}<extra></extra>',
+                        text=df_diario['Lucro Total'].apply(lambda x: f'R$ {x:,.2f}'), textposition='outside'
+                    ))
+                    fig.update_layout(
+                        barmode='stack', paper_bgcolor='white', plot_bgcolor='white',
+                        yaxis=dict(showgrid=False, zeroline=False, showticklabels=False, fixedrange=True),
+                        xaxis=dict(showgrid=False, zeroline=False),
+                        margin=dict(l=10, r=10, t=40, b=10),
+                        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5),
+                        font=dict(color="#31333F"), hovermode='x'
+                    )
+                    st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
+                    st.markdown('</div>', unsafe_allow_html=True)
+
+                # Métricas e Histórico
+                st.write("")
                 c1, c2, c3 = st.columns(3)
                 c1.metric("Faturamento Total", f"R$ {df_vendas['Faturamento'].sum():.2f}")
                 margem_geral = (df_vendas['Lucro Total'].sum()/df_vendas['Faturamento'].sum()*100) if df_vendas['Faturamento'].sum() > 0 else 0
                 c2.metric("Lucro Líquido Total", f"R$ {df_vendas['Lucro Total'].sum():.2f}", delta=f"{margem_geral:.1f}% margem")
                 c3.metric("Itens Vendidos", int(df_vendas['Quantidade'].sum()))
-            else:
-                st.info("Aguardando registros de vendas para exibir dados.")
-        except:
-            st.warning("Aba 'vendas_realizadas' não detectada no Google Sheets.")
+
+                st.divider()
+                st.subheader("📋 Histórico e Gerenciamento")
+                
+                # Cabeçalho Fixo (Fora do Scroll para ficar visível)
+                st.markdown("""
+                    <div style="display: flex; font-weight: bold; background-color: #f8f9fa; padding: 10px 15px; border: 1px solid #e6e6e6; border-bottom: 2px solid #e6e6e6; border-radius: 10px 10px 0 0;">
+                        <div style="flex: 3;">Produto</div>
+                        <div style="flex: 2;">SKU</div>
+                        <div style="flex: 1;">Qtd</div>
+                        <div style="flex: 2;">Data</div>
+                        <div style="flex: 2;">Lucro</div>
+                        <div style="flex: 1;">Ação</div>
+                    </div>
+                """, unsafe_allow_html=True)
+
+                # --- TABELA DE HISTÓRICO COM SCROLL E LATERAIS ---
+                st.markdown('<div class="historico-scroll-container">', unsafe_allow_html=True)
+                
+                df_exibicao = df_vendas.copy().reset_index()
+                for idx, row in df_exibicao[::-1].iterrows():
+                    st.markdown(f'<div class="linha-historico">', unsafe_allow_html=True)
+                    cols = st.columns([3, 2, 1, 2, 2, 1])
+                    cols[0].write(row['Produto'])
+                    cols[1].write(f"`{row['SKU']}`")
+                    cols[2].write(str(row['Quantidade']))
+                    cols[3].write(row['Data'].strftime('%d/%m/%Y'))
+                    cols[4].write(f"R$ {row['Lucro Total']:.2f}")
+                    if cols[5].button("❌", key=f"del_{idx}"):
+                        aba_inst_vendas.delete_rows(row['index'] + 2)
+                        st.success("Venda removida!")
+                        st.rerun()
+                    st.markdown('</div>', unsafe_allow_html=True)
+                st.markdown('</div>', unsafe_allow_html=True)
+                
+            else: st.info("Sem vendas registradas.")
+        except Exception as e: st.warning(f"Erro ao carregar dados: {e}")
