@@ -12,7 +12,12 @@ from datetime import datetime
 import plotly.graph_objects as go # Importando Plotly
 
 # --- CONFIGURAÇÕES DE PÁGINA ---
-st.set_page_config(page_title="Leandro Marketplace", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(
+    page_title="Leandro Marketplace", 
+    page_icon="🛒", # <--- ALTERE AQUI (Pode colar o emoji do carrinho)
+    layout="wide", 
+    initial_sidebar_state="expanded"
+)
 
 # --- ESTILIZAÇÃO CUSTOMIZADA ---
 st.markdown("""
