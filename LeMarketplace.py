@@ -113,14 +113,16 @@ st.markdown("""
     """, unsafe_allow_html=True)
 
 # --- CONEXÃO COM GOOGLE SHEETS ---
-@st.cache_resource(ttl=600)
+@st.cache_resource(ttl=3600)
 def conectar_google_sheets():
     from google.oauth2 import service_account
+    import gspread
     
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
     sheet_id = "1sWBnF83-z6yrEKxWoJ1IulHNkwSEU6Si6WzNuLxqW44"
     info = None
 
+    # Tenta carregar via st.secrets (Nuvem)
     try:
         if "gcp_service_account" in st.secrets:
             info = dict(st.secrets["gcp_service_account"])
@@ -132,6 +134,7 @@ def conectar_google_sheets():
     except:
         info = None
 
+    # Tenta carregar via arquivo local (Desktop)
     if info is None:
         path_json = r'C:\Users\Junior\Desktop\CodigosPython2\.streamlit\secrets.toml.json'
         if os.path.exists(path_json):
@@ -146,6 +149,15 @@ def conectar_google_sheets():
         except Exception as e:
             st.error(f"Erro na autenticação final: {e}")
     return None
+
+@st.cache_data(ttl=60) # PROTEÇÃO: Lê os dados e segura na memória por 60 segundos
+def buscar_dados_planilha(_planilha, nome_aba):
+    try:
+        if _planilha:
+            return _planilha.worksheet(nome_aba).get_all_values()
+        return None
+    except:
+        return None
 
 def converter_custo_seguro(valor_raw):
     if valor_raw is None or valor_raw == "": 
@@ -483,8 +495,7 @@ if st.session_state.logado and planilha:
         # --- SEÇÃO DE GRÁFICOS E HISTÓRICO (FORA DO EXPANDER) ---
         st.divider()
         try:
-            aba_inst_vendas = planilha.worksheet("vendas_realizadas")
-            dados_vendas = aba_inst_vendas.get_all_values()
+            dados_vendas = buscar_dados_planilha(planilha, "vendas_realizadas")
             if len(dados_vendas) > 1:
                 df_vendas = pd.DataFrame(dados_vendas[1:], columns=dados_vendas[0])
                 df_vendas['Preço Venda'] = df_vendas['Preço Venda'].apply(converter_custo_seguro)
@@ -553,7 +564,7 @@ if st.session_state.logado and planilha:
                         textposition='outside'
                     ))
                     
-                    fig.update_layout(
+                fig.update_layout(
                         barmode='stack', 
                         paper_bgcolor='white', 
                         plot_bgcolor='white',
@@ -589,8 +600,8 @@ if st.session_state.logado and planilha:
                         hovermode='closest' 
                     )
                     
-                    st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
-                    st.markdown('</div>', unsafe_allow_html=True)
+                st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
+                st.markdown('</div>', unsafe_allow_html=True)
 
                 # Métricas e Histórico
                 st.write("")
