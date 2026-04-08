@@ -6,18 +6,20 @@ import re
 import urllib.parse
 import json
 import os
+import io
+import base64
+from datetime import datetime
 
 # --- CONFIGURAÇÕES DE PÁGINA ---
 st.set_page_config(page_title="Leandro Marketplace", layout="wide", initial_sidebar_state="expanded")
 
-# --- ESTILIZAÇÃO CUSTOMIZADA (PADRONIZAÇÃO TOTAL DA SIDEBAR E AJUSTE DO BANNER) ---
+# --- ESTILIZAÇÃO CUSTOMIZADA ---
 st.markdown("""
     <style>
     .stApp { background-color: white !important; }
     [data-testid="stSidebar"] { background-color: #f8f9fa !important; border-right: 1px solid #e6e6e6; }
     h1, h2, h3, p, span, label, .stMarkdown { color: #31333F !important; }
     
-    /* FORÇAR LARGURA IGUAL EM TODOS OS BOTÕES DA SIDEBAR */
     section[data-testid="stSidebar"] .stButton button {
         width: 100% !important;
         border-radius: 10px !important;
@@ -52,7 +54,6 @@ st.markdown("""
         padding-left: 0px !important;
     }
 
-    /* AJUSTE DO BANNER (ALTURA AUTOMÁTICA CONFORME SOLICITADO) */
     [data-testid="stImage"] img {
         height: auto; 
         object-fit: contain; 
@@ -61,23 +62,18 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- CONEXÃO COM GOOGLE SHEETS (HÍBRIDA BLINDADA) ---
+# --- CONEXÃO COM GOOGLE SHEETS ---
 @st.cache_resource(ttl=600)
 def conectar_google_sheets():
-    import json
-    import os
-    import base64
     from google.oauth2 import service_account
     
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
     sheet_id = "1sWBnF83-z6yrEKxWoJ1IulHNkwSEU6Si6WzNuLxqW44"
     info = None
 
-    # --- 1. TENTA NUVEM ---
     try:
         if "gcp_service_account" in st.secrets:
             info = dict(st.secrets["gcp_service_account"])
-            # SE A CHAVE ESTIVER EM BASE64, ELE DECODIFICA. SE NÃO, USA NORMAL.
             if 'private_key' in info and "BEGIN" not in info['private_key']:
                 decoded_key = base64.b64decode(info['private_key']).decode("utf-8")
                 info['private_key'] = decoded_key
@@ -86,14 +82,12 @@ def conectar_google_sheets():
     except:
         info = None
 
-    # --- 2. TENTA LOCAL ---
     if info is None:
         path_json = r'C:\Users\Junior\Desktop\CodigosPython2\.streamlit\secrets.toml.json'
         if os.path.exists(path_json):
             with open(path_json, 'r', encoding='utf-8') as f:
                 info = json.load(f)
 
-    # --- 3. AUTENTICAÇÃO ---
     if info:
         try:
             creds = service_account.Credentials.from_service_account_info(info, scopes=scope)
@@ -103,47 +97,40 @@ def conectar_google_sheets():
             st.error(f"Erro na autenticação final: {e}")
     return None
 
-# --- FUNÇÃO DE CONVERSÃO DE MOEDA ---
 def converter_custo_seguro(valor_raw):
-    if not valor_raw or valor_raw == "": return 0.0
+    if valor_raw is None or valor_raw == "": 
+        return 0.0
     s = str(valor_raw).replace('R$', '').replace(' ', '').strip()
-    if ',' not in s and '.' not in s:
-        try:
-            val = float(s)
-            # Lógica simples para tratar valores que podem vir em centavos
-            return val / 100 if val > 1000 else val
-        except: return 0.0
-    if ',' in s:
-        if '.' in s: s = s.replace('.', '')
-        s = s.replace(',', '.')
-    try: return float(s)
-    except: return 0.0
+    try:
+        if ',' in s and '.' in s:
+            s = s.replace('.', '').replace(',', '.')
+        elif ',' in s:
+            s = s.replace(',', '.')
+        return float(s)
+    except (ValueError, TypeError):
+        return 0.0
 
-# --- MOTOR DE CÁLCULO ---
 def calcular_venda_completo(custo_aquisicao, margem_percentual, mkt):
-    imposto_tax = 0.06 # Imposto fixo de 6%
+    imposto_tax = 0.06 
     margem_alvo = margem_percentual / 100
-    custo_fixo_invisivel = 1.00 # Custo fixo operacional
+    custo_fixo_invisivel = 1.00 
     
     if mkt == "shein":
-        comissao_mkt, taxa_extra = 0.18, 5.0 # Comissão 18% + Taxa Extra R$ 5,00
-        # Fórmula para preço de venda: P = (Custo_Aquisicao + Custo_Fixo + Taxa_Extra) / (1 - (Comissao + Imposto + Margem))
+        comissao_mkt, taxa_extra = 0.18, 5.0
         divisor = 1 - (comissao_mkt + imposto_tax + margem_alvo)
         preco = (custo_aquisicao + custo_fixo_invisivel + taxa_extra) / divisor if divisor > 0 else 0
         lucro = preco - (preco * comissao_mkt) - (preco * imposto_tax) - custo_aquisicao - custo_fixo_invisivel - taxa_extra
         return preco, lucro
     
     elif mkt == "shopee":
-        # Lógica de taxas da Shopee baseada no custo
         taxa_plat = 4.0 if custo_aquisicao < 50 else 20.0 
-        comis_mkt = 0.20 if custo_aquisicao < 50 else 0.14 # Comissão varia
+        comis_mkt = 0.20 if custo_aquisicao < 50 else 0.14 
         divisor = 1 - (comis_mkt + imposto_tax + margem_alvo)
         preco = (custo_aquisicao + custo_fixo_invisivel + taxa_plat) / divisor if divisor > 0 else 0
         lucro = preco - (preco * comis_mkt) - (preco * imposto_tax) - custo_aquisicao - custo_fixo_invisivel - taxa_plat
         return preco, lucro
 
     elif mkt == "temu":
-        # Temu com comissão 0%, apenas imposto e margem
         divisor = 1 - (imposto_tax + margem_alvo)
         preco = (custo_aquisicao + custo_fixo_invisivel) / divisor if divisor > 0 else 0
         lucro = preco - (preco * imposto_tax) - custo_aquisicao - custo_fixo_invisivel
@@ -155,7 +142,7 @@ def calcular_venda_completo(custo_aquisicao, margem_percentual, mkt):
 if 'pg' not in st.session_state: st.session_state.pg = "Início"
 if 'logado' not in st.session_state: st.session_state.logado = False
 
-# --- SIDEBAR (BARRA LATERAL) ---
+# --- SIDEBAR ---
 with st.sidebar:
     st.image("https://cdn-icons-png.flaticon.com/512/3081/3081559.png", width=80)
     st.title("D.L Online Store")
@@ -165,7 +152,6 @@ with st.sidebar:
     if st.button("✉️ Contato"): st.session_state.pg = "Contato"
     st.divider()
     
-    # Lógica de Login
     if not st.session_state.logado:
         st.subheader("🔐 Área do Vendedor")
         u = st.text_input("Usuário")
@@ -173,40 +159,32 @@ with st.sidebar:
         if st.button("Entrar no Painel", type="primary"):
             if u == "leandro" and p == "123":
                 st.session_state.logado = True
-                st.session_state.pg = "Calculadora" # Redireciona para o painel restrito
+                st.session_state.pg = "Calculadora" 
                 st.rerun()
             else:
                 st.error("Usuário ou senha incorretos.")
     else:
-        # Menus da Área Logada
-        st.subheader(f"👋 Olá, {st.session_state.logado if isinstance(st.session_state.logado, str) else 'Leandro'}")
+        st.subheader(f"👋 Olá, Leandro")
         if st.button("📊 Comparativo de Preços"): st.session_state.pg = "Calculadora"
         if st.button("📝 Novo Item na Base"): st.session_state.pg = "Cadastro"
-        if st.button("📈 Relatório de Vendas"): st.session_state.pg = "Relatórios"
+        if st.button("📈 Análise de Vendas"): st.session_state.pg = "Análise de Vendas"
+        if st.button("📉 Dashboard Financeiro"): st.session_state.pg = "Dashboard"
         st.write("")
         if st.button("🚪 Sair"):
             st.session_state.logado = False
             st.rerun()
 
-# --- CONEXÃO COM A PLANILHA ---
 planilha = conectar_google_sheets()
 
-# --- CONTEÚDO PÚBLICO (SEM LOGIN) ---
+# --- PÁGINA INÍCIO ---
 if st.session_state.pg == "Início":
-    # 1. DEFINE OS CAMINHOS
     caminho_local = r"C:\Users\Junior\Desktop\CodigosPython2\banner_inicio.jpg"
-    nome_arquivo = "banner_inicio.jpg"
-
-    # 2. LOGICA DA IMAGEM (HIBRIDA)
     if os.path.exists(caminho_local):
         st.image(caminho_local, use_container_width=True)
     else:
-        st.image(nome_arquivo, use_container_width=True)
+        st.image("https://images.unsplash.com/photo-1556742049-0cfed4f6a45d?auto=format&fit=crop&w=1000&q=80", use_container_width=True)
     
-    # 3. TEXTOS (FORA DO IF/ELSE DA IMAGEM PARA APARECER SEMPRE)
     st.markdown("<h1 style='text-align: center;'>Bem-vindo à D.L Online Store</h1>", unsafe_allow_html=True)
-    st.write("")
-    
     col_a, col_b, col_c = st.columns([1,3,1])
     with col_b:
         st.markdown("""
@@ -227,182 +205,210 @@ if st.session_state.pg == "Início":
 
 elif st.session_state.pg == "Quem Somos":
     st.header("👥 Quem Somos")
-    st.write("Especialistas em gestão de e-commerce e atendimento ao cliente, focados em trazer a melhor experiência de compra.")
+    st.write("Especialistas em e-commerce e curadoria de produtos de alta qualidade.")
 
 elif st.session_state.pg == "Serviços":
     st.header("🛠️ Nossos Serviços")
-    st.write("Venda de Produtos em diversos nichos, Logística eficiente e garantia de atendimento humanizado através do nossos Marketplaces parceiros (Shein, Shopee, Temu).")
+    st.write("Vendas e logística eficiente em marketplaces globais.")
 
 elif st.session_state.pg == "Contato":
     st.header("✉️ Central de Atendimento")
-    
-    # WHATSAPP COM ÍCONE E LINK CLICÁVEL
     whatsapp_url = "https://wa.me/5511960501826"
-    st.markdown(f"""
-        <a href="{whatsapp_url}" target="_blank" style="text-decoration: none;">
-            <div style="background-color: #25D366; color: white; padding: 15px; border-radius: 10px; display: inline-block; font-weight: bold; font-size: 18px;">
-                <img src="https://cdn-icons-png.flaticon.com/512/733/733585.png" width="25" style="vertical-align: middle; margin-right: 10px;">
-                Falar no WhatsApp: (11) 96050-1826
-            </div>
-        </a>
-    """, unsafe_allow_html=True)
-    
+    st.markdown(f'<a href="{whatsapp_url}" target="_blank" style="text-decoration: none;"><div style="background-color: #25D366; color: white; padding: 15px; border-radius: 10px; display: inline-block; font-weight: bold; font-size: 18px;">Falar no WhatsApp: (11) 96050-1826</div></a>', unsafe_allow_html=True)
     st.divider()
-    st.subheader("Formulário de Suporte / Sugestão")
-    st.write("Para outras dúvidas, e-mails comerciais ou feedback, use o formulário abaixo que gera um e-mail pronto.")
-    
     with st.form("form_contato"):
-        nome = st.text_input("Seu Nome")
-        produto = st.text_input("Produto Adquirido")
-        tipo = st.selectbox("Assunto", ["Elogio", "Sugestão", "Reclamação", "Dúvida"])
-        mensagem = st.text_area("Sua Mensagem")
-        
-        enviar = st.form_submit_button("Gerar E-mail de Contato", type="primary")
-        
-        if enviar:
-            if nome and mensagem:
-                email_destino = "vendas.dlonlinestore@gmail.com"
-                assunto = f"{tipo}: {produto} - {nome}"
-                corpo = f"Nome: {nome}\nProduto: {produto}\n\nMensagem:\n{mensagem}"
-                
-                # Encode para URL
-                assunto_enc = urllib.parse.quote(assunto)
-                corpo_enc = urllib.parse.quote(corpo)
-                mailto_link = f"mailto:{email_destino}?subject={assunto_enc}&body={corpo_enc}"
-                
-                st.success("Tudo pronto! Clique no botão abaixo para abrir seu aplicativo de e-mail:")
-                st.markdown(f"""<a href="{mailto_link}" style="background-color: #007bff; color: white; padding: 10px 20px; border-radius: 5px; text-decoration: none;">📧 Abrir E-mail</a>""", unsafe_allow_html=True)
-            else:
-                st.error("Por favor, preencha pelo menos o Nome e a Mensagem.")
+        nome = st.text_input("Nome")
+        prod = st.text_input("Produto")
+        tipo = st.selectbox("Assunto", ["Dúvida", "Elogio", "Reclamação"])
+        msg = st.text_area("Mensagem")
+        if st.form_submit_button("Gerar E-mail"):
+            if nome and msg:
+                mailto = f"mailto:vendas.dlonlinestore@gmail.com?subject={tipo}&body={msg}"
+                st.markdown(f'<a href="{mailto}" style="background-color:#007bff; color:white; padding:10px; border-radius:5px; text-decoration:none;">📧 Abrir E-mail</a>', unsafe_allow_html=True)
 
-# --- ÁREA RESTRITA (LOGADA) ---
+# --- ÁREA RESTRITA ---
 if st.session_state.logado and planilha:
     
+    lista_base_validacao = []
+    for aba_nome in ["shein", "shopee", "temu"]:
+        try:
+            dados_aba_val = planilha.worksheet(aba_nome).get_all_values()
+            if dados_aba_val:
+                df_val = pd.DataFrame(dados_aba_val[1:], columns=dados_aba_val[0])
+                lista_base_validacao.append(df_val)
+        except: pass
+    df_base_completa = pd.concat(lista_base_validacao).drop_duplicates(subset=['SKU']) if lista_base_validacao else pd.DataFrame()
+
     if st.session_state.pg == "Calculadora":
-        st.header("📊 Comparativo de Preços (Unitário)")
-        
-        if not planilha:
-            st.error("Erro na conexão com o Google Sheets. Verifique o console ou tente novamente.")
-            st.stop()
+        st.header("📊 Comparativo de Preços")
+        if not df_base_completa.empty:
+            df_geral = df_base_completa.copy()
+            df_geral['Custo_aquisicao_num'] = df_geral['Custo_aquisicao'].apply(converter_custo_seguro)
             
-        lista_dfs = []
-        for a in ["shein", "shopee", "temu"]:
-            try:
-                d = pd.DataFrame(planilha.worksheet(a).get_all_records())
-                if not d.empty: 
-                    # Filtra apenas as colunas necessárias para o seletor
-                    lista_dfs.append(d[['Produto', 'Custo_aquisicao']])
-            except: pass
-        
-        if lista_dfs:
-            # Consolida todos os produtos para a busca
-            df_geral = pd.concat(lista_dfs).drop_duplicates(subset=['Produto'])
+            col_sel1, col_sel2 = st.columns(2)
+            with col_sel1:
+                prod_sel = st.selectbox("Pesquisar Produto", df_geral['Produto'].unique(), index=None, placeholder="Digite o produto...")
+            with col_sel2:
+                sku_sel = st.selectbox("Pesquisar SKU", df_geral['SKU'].unique(), index=None, placeholder="Digite o SKU...")
             
-            # Placeholder e index=None permitem que o usuário digite para buscar
-            prod_sel = st.selectbox("Selecione ou Digite o Produto", df_geral['Produto'].unique(), index=None, placeholder="Digite o nome do produto...")
-            
-            if prod_sel:
-                row = df_geral[df_geral['Produto'] == prod_sel].iloc[0]
-                custo_aq = converter_custo_seguro(row['Custo_aquisicao'])
+            final_item = None
+            if sku_sel: final_item = df_geral[df_geral['SKU'] == sku_sel].iloc[0]
+            elif prod_sel: final_item = df_geral[df_geral['Produto'] == prod_sel].iloc[0]
+
+            if final_item is not None:
+                custo_aq = final_item['Custo_aquisicao_num']
+                st.info(f"Selecionado: {final_item['Produto']} | SKU: {final_item['SKU']}")
                 margem_input = st.number_input("Margem de Lucro Desejada (%)", min_value=1.0, value=2.0, step=1.0)
-                
-                # Executa os cálculos para cada marketplace
                 p_shein, l_shein = calcular_venda_completo(custo_aq, margem_input, "shein")
                 p_shopee, l_shopee = calcular_venda_completo(custo_aq, margem_input, "shopee")
                 p_temu, l_temu = calcular_venda_completo(custo_aq, margem_input, "temu")
-                
                 st.divider()
-                st.subheader(f"Análise de Preços Sugeridos: {prod_sel}")
                 st.metric("Custo de Aquisição Base", f"R$ {custo_aq:.2f}")
-                
-                # Monta a tabela de resultados com a coluna de Custo Unitário adicionada
-                res = {
-                    "Canal": ["SHEIN", "SHOPEE", "TEMU"],
-                    "Custo Unitário": [f"R$ {custo_aq:.2f}", f"R$ {custo_aq:.2f}", f"R$ {custo_aq:.2f}"],
-                    "Preço Sugerido": [f"R$ {p_shein:.2f}", f"R$ {p_shopee:.2f}", f"R$ {p_temu:.2f}"],
-                    "Lucro Líquido Real": [f"R$ {l_shein:.2f}", f"R$ {l_shopee:.2f}", f"R$ {l_temu:.2f}"]
-                }
+                res = {"Canal": ["SHEIN", "SHOPEE", "TEMU"], "Preço Sugerido": [f"R$ {p_shein:.2f}", f"R$ {p_shopee:.2f}", f"R$ {p_temu:.2f}"], "Lucro Líquido Real": [f"R$ {l_shein:.2f}", f"R$ {l_shopee:.2f}", f"R$ {l_temu:.2f}"]}
                 st.table(pd.DataFrame(res))
 
-    elif st.session_state.pg == "Relatórios":
-        st.header("📈 Relatório de Vendas")
-        
-        if not planilha:
-            st.error("Erro na conexão com o Google Sheets.")
-            st.stop()
+    elif st.session_state.pg == "Análise de Vendas":
+        st.header("📈 Análise de Vendas")
+        if not df_base_completa.empty:
+            df_rel = df_base_completa.copy()
+            df_rel['Custo_num'] = df_rel['Custo_aquisicao'].apply(converter_custo_seguro)
+            st.divider()
+            st.subheader("🏆 Inteligência de Mercado (Melhor Margem)")
+            m_alvo = st.slider("Margem para Análise (%)", 1.0, 50.0, 2.0)
+            rank_data = []
+            for _, r in df_rel.iterrows():
+                _, l1 = calcular_venda_completo(r['Custo_num'], m_alvo, "shein")
+                _, l2 = calcular_venda_completo(r['Custo_num'], m_alvo, "shopee")
+                _, l3 = calcular_venda_completo(r['Custo_num'], m_alvo, "temu")
+                max_l = max(l1, l2, l3)
+                rank_data.append({"Produto": r['Produto'], "SKU": r['SKU'], "Lucro Estimado": round(max_l, 2)})
             
-        lista_rel = []
-        for a in ["shein", "shopee", "temu"]:
-            try: 
-                d_aba = pd.DataFrame(planilha.worksheet(a).get_all_records())
-                if not d_aba.empty: 
-                    lista_rel.append(d_aba[['Produto', 'Custo_aquisicao']])
-            except: pass
-        
-        if lista_rel:
-            df_rel = pd.concat(lista_rel).drop_duplicates(subset=['Produto'])
+            df_rank = pd.DataFrame(rank_data).sort_values(by="Lucro Estimado", ascending=False)
+            st.dataframe(df_rank, use_container_width=True)
             
-            c1, c2, c3 = st.columns(3)
-            with c1:
-                # Selectbox configurado para permitir digitação/busca
-                prod_v = st.selectbox("Selecione o Produto", df_rel['Produto'].unique(), index=None, placeholder="Buscar produto...")
-                qtd_v = st.number_input("Quantidade Vendida", min_value=1, value=1)
-            with c2:
-                mkt_v = st.selectbox("Marketplace", ["shein", "shopee", "temu"])
-                vlr_un = st.number_input("Preço de Venda Praticado (Unitário)", min_value=0.01)
+            buffer = io.BytesIO()
+            with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
+                df_rank.to_excel(writer, index=False, sheet_name='Ranking_Lucro')
+                writer.close()
             
-            if st.button("Calcular Lucro Real da Venda", type="primary") and prod_v:
-                # Lógica de cálculo do lucro real baseada na venda praticada
-                it = df_rel[df_rel['Produto'] == prod_v].iloc[0]
-                c_aq = converter_custo_seguro(it['Custo_aquisicao'])
-                
-                faturamento = vlr_un * qtd_v
-                # Inclui custo de aquisição e custo operacional
-                custos_totais = (c_aq + 1.00) * qtd_v 
-                imposto = faturamento * 0.06 # 6% fixo
-                
-                # Taxas baseadas nas regras de cada marketplace
-                if mkt_v == "shein": 
-                    taxas = (faturamento * 0.18) + (5 * qtd_v)
-                elif mkt_v == "shopee":
-                    # Regra simples da Shopee baseada no valor unitário
-                    taxas = (faturamento * 0.20 + 4 * qtd_v) if vlr_un <= 79.99 else (faturamento * 0.14 + 20 * qtd_v)
-                else: 
-                    taxas = 0 # Temu 0% de taxas
-                
-                lucro_final = faturamento - custos_totais - taxas - imposto
-                
-                st.divider()
-                st.subheader(f"Resultado Financeiro Real: {prod_v}")
-                r1, r2, r3, r4 = st.columns(4)
-                r1.metric("Faturamento Total", f"R$ {faturamento:.2f}")
-                r2.metric("Custo + Operacional", f"R$ {custos_totais:.2f}")
-                r3.metric("Taxas + Impostos", f"R$ {taxas + imposto:.2f}")
-                
-                # Margem percentual
-                margem_real = ((lucro_final / faturamento) * 100) if faturamento > 0 else 0
-                r4.metric("Lucro Líquido Real", f"R$ {lucro_final:.2f}", delta=f"{margem_real:.1f}%")
+            st.download_button(
+                label="📥 Exportar Ranking (xlsx)",
+                data=buffer.getvalue(),
+                file_name="ranking_lucro_dl_store.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
 
     elif st.session_state.pg == "Cadastro":
         st.header("📝 Novo Item na Base")
-        
-        if not planilha:
-            st.error("Erro na conexão com o Google Sheets.")
-            st.stop()
-            
         with st.form("cad_final"):
-            st.markdown("### Preencha as informações do novo produto")
-            m = st.selectbox("Selecione o Marketplace", ["shein", "shopee", "temu"])
+            m = st.selectbox("Marketplace", ["shein", "shopee", "temu", "todos"])
             n = st.text_input("Nome Completo do Produto")
-            s = st.text_input("SKU / Referência Interna") # SKU incluído
-            c = st.number_input("Custo Unitário de Aquisição (R$)", min_value=0.01)
-            
+            s = st.text_input("SKU / Referência Interna")
+            c = st.number_input("Custo Unitário (R$)", min_value=0.01, step=0.01)
             if st.form_submit_button("Salvar na Planilha", type="primary"):
-                # Validação simples
                 if n and s:
-                    # Envia os dados para a aba correspondente na planilha Google
-                    # Salva Nome, SKU e Custo (formatado com vírgula para o Sheets)
-                    planilha.worksheet(m).append_row([n, s, str(c).replace('.', ',')])
-                    st.success(f"Sucesso! Produto '{n}' salvo na base {m.upper()}.")
-                else:
-                    st.error("Por favor, preencha o Nome e o SKU.")
+                    valor_formatado = str(c).replace('.', ',')
+                    if m == "todos":
+                        for aba in ["shein", "shopee", "temu"]:
+                            planilha.worksheet(aba).append_row([n, s, valor_formatado])
+                        st.success(f"Produto '{n}' salvo em todas as abas!")
+                    else:
+                        planilha.worksheet(m).append_row([n, s, valor_formatado])
+                        st.success(f"Produto '{n}' salvo na aba {m}!")
+                else: st.error("Preencha Nome e SKU.")
+
+    elif st.session_state.pg == "Dashboard":
+        st.header("📊 Dashboard Financeiro")
+        with st.expander("➕ Registrar Nova Venda", expanded=True):
+            if not df_base_completa.empty:
+                df_dash = df_base_completa.copy()
+                df_dash['Custo_num'] = df_dash['Custo_aquisicao'].apply(converter_custo_seguro)
+                
+                # Seleção Dupla Validada
+                col_p1, col_p2 = st.columns(2)
+                with col_p1:
+                    v_prod_sel = st.selectbox("Pesquisar por Nome", sorted(df_dash['Produto'].unique()), index=None, placeholder="Busque o Produto...")
+                with col_p2:
+                    v_sku_sel = st.selectbox("Pesquisar por SKU", sorted(df_dash['SKU'].unique()), index=None, placeholder="Busque o SKU...")
+                
+                # Validação Cruzada
+                item_venda = None
+                if v_sku_sel: item_venda = df_dash[df_dash['SKU'] == v_sku_sel].iloc[0]
+                elif v_prod_sel: item_venda = df_dash[df_dash['Produto'] == v_prod_sel].iloc[0]
+
+                if item_venda is not None:
+                    v_nome_final = item_venda['Produto']
+                    v_sku_final = item_venda['SKU']
+                    v_custo_base = item_venda['Custo_num']
+                    st.success(f"✅ Item: **{v_nome_final}** | SKU: **{v_sku_final}** | Custo: R$ {v_custo_base:.2f}")
+
+                    with st.form("form_venda_auto"):
+                        c_v1, c_v2, c_v3 = st.columns(3)
+                        with c_v1:
+                            mkt_venda = st.selectbox("Marketplace da Venda", ["shein", "shopee", "temu"])
+                            v_qtd = st.number_input("Qtd", min_value=1, value=1)
+                        with c_v2:
+                            v_preco_venda = st.number_input("Preço de Venda (R$)", min_value=0.01, step=0.01)
+                            v_data = st.date_input("Data", value=datetime.now())
+                        with c_v3:
+                            st.write("Cálculo de Lucro")
+                            # Cálculo automático do lucro baseado no motor de custos
+                            # Usamos a margem reversa: (Preço Venda / Preço Sugerido) para achar o lucro real
+                            # Mas para simplificar e ser exato, calculamos o lucro direto:
+                            # Lucro = Preço - (Preço*Comissao) - (Preço*Imposto) - Custo - Taxas
+                            imposto_v = 0.06
+                            custo_op_v = 1.00
+                            if mkt_venda == "shein":
+                                com, tax = 0.18, 5.0
+                                lucro_un = v_preco_venda - (v_preco_venda * com) - (v_preco_venda * imposto_v) - v_custo_base - custo_op_v - tax
+                            elif mkt_venda == "shopee":
+                                tax = 4.0 if v_custo_base < 50 else 20.0
+                                com = 0.20 if v_custo_base < 50 else 0.14
+                                lucro_un = v_preco_venda - (v_preco_venda * com) - (v_preco_venda * imposto_v) - v_custo_base - custo_op_v - tax
+                            else: # temu
+                                lucro_un = v_preco_venda - (v_preco_venda * imposto_v) - v_custo_base - custo_op_v
+                            
+                            st.metric("Lucro Líquido Unit.", f"R$ {lucro_un:.2f}")
+
+                        if st.form_submit_button("Confirmar e Salvar Venda", type="primary"):
+                            try:
+                                aba_vendas = planilha.worksheet("vendas_realizadas")
+                                lucro_total = lucro_un * v_qtd
+                                data_str = v_data.strftime("%d/%m/%Y")
+                                aba_vendas.append_row([v_nome_final, v_sku_final, str(v_preco_venda).replace('.',','), v_qtd, data_str, str(lucro_total).replace('.',',')])
+                                st.success(f"Venda de {v_sku_final} registrada com R$ {lucro_total:.2f} de lucro!")
+                                st.rerun()
+                            except:
+                                st.error("Erro: Verifique a aba 'vendas_realizadas'.")
+            else:
+                st.warning("Nenhum produto cadastrado para seleção.")
+
+        st.divider()
+        try:
+            dados_vendas = planilha.worksheet("vendas_realizadas").get_all_values()
+            if len(dados_vendas) > 1:
+                df_vendas = pd.DataFrame(dados_vendas[1:], columns=dados_vendas[0])
+                df_vendas['Preço Venda'] = df_vendas['Preço Venda'].apply(converter_custo_seguro)
+                df_vendas['Lucro Total'] = df_vendas['Lucro Total'].apply(converter_custo_seguro)
+                df_vendas['Quantidade'] = pd.to_numeric(df_vendas['Quantidade'])
+                df_vendas['Faturamento'] = df_vendas['Preço Venda'] * df_vendas['Quantidade']
+                df_vendas['Data'] = pd.to_datetime(df_vendas['Data'], dayfirst=True)
+                
+                df_diario = df_vendas.groupby('Data').agg({'Faturamento': 'sum', 'Lucro Total': 'sum'}).reset_index()
+                df_diario['Data_Label'] = df_diario['Data'].dt.strftime('%d/%m')
+                df_diario['Outros Custos'] = df_diario['Faturamento'] - df_diario['Lucro Total']
+
+                st.subheader("📈 Faturamento vs Lucro Líquido (Por Dia)")
+                chart_data = df_diario.set_index('Data_Label')[['Lucro Total', 'Outros Custos']]
+                st.bar_chart(chart_data, color=["#FFD700", "#31333F"])
+                st.caption("🟡 Lucro Líquido | ⚫ Custos e Impostos")
+
+                c1, c2, c3 = st.columns(3)
+                c1.metric("Faturamento Total", f"R$ {df_vendas['Faturamento'].sum():.2f}")
+                margem_geral = (df_vendas['Lucro Total'].sum()/df_vendas['Faturamento'].sum()*100) if df_vendas['Faturamento'].sum() > 0 else 0
+                c2.metric("Lucro Líquido Total", f"R$ {df_vendas['Lucro Total'].sum():.2f}", delta=f"{margem_geral:.1f}% margem")
+                c3.metric("Itens Vendidos", int(df_vendas['Quantidade'].sum()))
+            else:
+                st.info("Aguardando registros de vendas para exibir dados.")
+        except:
+            st.warning("Aba 'vendas_realizadas' não detectada no Google Sheets.")
