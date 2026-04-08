@@ -10,6 +10,8 @@ import io
 import base64
 from datetime import datetime
 import plotly.graph_objects as go # Importando Plotly
+if 'processando_venda' not in st.session_state:
+    st.session_state.processando_venda = False
 
 # --- CONFIGURAÇÕES DE PÁGINA ---
 st.set_page_config(
@@ -159,29 +161,57 @@ def converter_custo_seguro(valor_raw):
         return 0.0
 
 def calcular_venda_completo(custo_aquisicao, margem_percentual, mkt):
-    imposto_tax = 0.06 
+    imposto_tax = 0.06  # 6% de imposto fixo em todos
     margem_alvo = margem_percentual / 100
-    custo_fixo_invisivel = 1.00 
+    custo_embalagem = 1.00  # R$ 1,00 fixo de embalagem
     
     if mkt == "shein":
-        comissao_mkt, taxa_extra = 0.18, 5.0
+        # SHEIN: 18% de comissão + R$ 5,00 fixos
+        comissao_mkt, taxa_fixa = 0.18, 5.0
         divisor = 1 - (comissao_mkt + imposto_tax + margem_alvo)
-        preco = (custo_aquisicao + custo_fixo_invisivel + taxa_extra) / divisor if divisor > 0 else 0
-        lucro = preco - (preco * comissao_mkt) - (preco * imposto_tax) - custo_aquisicao - custo_fixo_invisivel - taxa_extra
+        preco = (custo_aquisicao + custo_embalagem + taxa_fixa) / divisor if divisor > 0 else 0
+        lucro = preco - (preco * comissao_mkt) - (preco * imposto_tax) - custo_aquisicao - custo_embalagem - taxa_fixa
         return preco, lucro
     
     elif mkt == "shopee":
-        taxa_plat = 4.0 if custo_aquisicao < 50 else 20.0 
-        comis_mkt = 0.20 if custo_aquisicao < 50 else 0.14 
-        divisor = 1 - (comis_mkt + imposto_tax + margem_alvo)
-        preco = (custo_aquisicao + custo_fixo_invisivel + taxa_plat) / divisor if divisor > 0 else 0
-        lucro = preco - (preco * comis_mkt) - (preco * imposto_tax) - custo_aquisicao - custo_fixo_invisivel - taxa_plat
-        return preco, lucro
+        # SHOPEE: Lógica baseada no PREÇO DE VENDA FINAL (Estimativa por faixas)
+        # Como as taxas dependem do preço final, testamos as faixas:
+        
+        def testar_faixa(comis, taxa):
+            div = 1 - (comis + imposto_tax + margem_alvo)
+            p = (custo_aquisicao + custo_embalagem + taxa) / div if div > 0 else 0
+            return p
+
+        # 1. Tentativa: Até R$ 79,99 (20% + R$ 4)
+        p_venda = testar_faixa(0.20, 4.0)
+        
+        if p_venda > 79.99:
+            # 2. Tentativa: R$ 80 a R$ 99,99 (14% + R$ 16)
+            p_venda = testar_faixa(0.14, 16.0)
+            
+            if p_venda > 99.99:
+                # 3. Tentativa: R$ 100 a R$ 199,99 (14% + R$ 20)
+                p_venda = testar_faixa(0.14, 20.0)
+                
+                if p_venda > 199.99:
+                    # 4. Tentativa: R$ 200 a R$ 499,99 (14% + R$ 26)
+                    p_venda = testar_faixa(0.14, 26.0)
+
+        # Cálculo do lucro real após definir a faixa de preço
+        # Re-identificar comissão e taxa para o cálculo do lucro
+        if p_venda <= 79.99: c_final, t_final = 0.20, 4.0
+        elif p_venda <= 99.99: c_final, t_final = 0.14, 16.0
+        elif p_venda <= 199.99: c_final, t_final = 0.14, 20.0
+        else: c_final, t_final = 0.14, 26.0
+
+        lucro = p_venda - (p_venda * c_final) - (p_venda * imposto_tax) - custo_aquisicao - custo_embalagem - t_final
+        return p_venda, lucro
 
     elif mkt == "temu":
+        # TEMU: Sem taxas de marketplace, apenas Imposto (6%) e Embalagem (R$ 1)
         divisor = 1 - (imposto_tax + margem_alvo)
-        preco = (custo_aquisicao + custo_fixo_invisivel) / divisor if divisor > 0 else 0
-        lucro = preco - (preco * imposto_tax) - custo_aquisicao - custo_fixo_invisivel
+        preco = (custo_aquisicao + custo_embalagem) / divisor if divisor > 0 else 0
+        lucro = preco - (preco * imposto_tax) - custo_aquisicao - custo_embalagem
         return preco, lucro
         
     return 0, 0
@@ -308,7 +338,7 @@ if st.session_state.logado and planilha:
             if final_item is not None:
                 custo_aq = final_item['Custo_aquisicao_num']
                 st.info(f"Selecionado: {final_item['Produto']} | SKU: {final_item['SKU']}")
-                margem_input = st.number_input("Margem de Lucro Desejada (%)", min_value=1.0, value=2.0, step=1.0)
+                margem_input = st.number_input("Margem de Lucro Desejada (%)", min_value=1.0, value=15.0, step=1.0)
                 p_shein, l_shein = calcular_venda_completo(custo_aq, margem_input, "shein")
                 p_shopee, l_shopee = calcular_venda_completo(custo_aq, margem_input, "shopee")
                 p_temu, l_temu = calcular_venda_completo(custo_aq, margem_input, "temu")
@@ -369,6 +399,11 @@ if st.session_state.logado and planilha:
 
     elif st.session_state.pg == "Dashboard":
         st.header("📊 Dashboard Financeiro")
+        
+        # 1. Garante que a variável de trava existe
+        if 'processando_venda' not in st.session_state:
+            st.session_state.processando_venda = False
+
         with st.expander("➕ Registrar Nova Venda", expanded=True):
             if not df_base_completa.empty:
                 df_dash = df_base_completa.copy()
@@ -381,39 +416,95 @@ if st.session_state.logado and planilha:
                     v_sku_sel = st.selectbox("Pesquisar por SKU", sorted(df_dash['SKU'].unique()), index=None, placeholder="Busque o SKU...")
                 
                 item_venda = None
-                if v_sku_sel: item_venda = df_dash[df_dash['SKU'] == v_sku_sel].iloc[0]
-                elif v_prod_sel: item_venda = df_dash[df_dash['Produto'] == v_prod_sel].iloc[0]
+                if v_sku_sel: 
+                    item_venda = df_dash[df_dash['SKU'] == v_sku_sel].iloc[0]
+                elif v_prod_sel: 
+                    item_venda = df_dash[df_dash['Produto'] == v_prod_sel].iloc[0]
 
                 if item_venda is not None:
-                    v_nome_final, v_sku_final, v_custo_base = item_venda['Produto'], item_venda['SKU'], item_venda['Custo_num']
-                    st.success(f"✅ Item: **{v_nome_final}** | SKU: **{v_sku_final}** | Custo Base: R$ {v_custo_base:.2f}")
+                    v_nome_final = item_venda['Produto']
+                    v_sku_final = item_venda['SKU']
+                    v_custo_base = item_venda['Custo_num']
 
+                    st.success(f"✅ Item: **{v_nome_final}** | SKU: **{v_sku_final}** | Custo Base: **R$ {v_custo_base:.2f}**")
+                    
                     c_v1, c_v2, c_v3 = st.columns(3)
                     with c_v1:
                         mkt_venda = st.selectbox("Canal de Venda", ["shein", "shopee", "temu"])
                         v_qtd = st.number_input("Qtd Vendida", min_value=1, value=1)
                     with c_v2:
-                        v_preco_venda = st.number_input("Preço de Venda Praticado (R$)", min_value=0.01, step=0.01)
-                        v_margem_manual = st.number_input("Margem de Lucro Obtida (%)", min_value=0.1, value=2.0, step=0.1)
+                        v_preco_venda = st.number_input("Preço de Venda Praticado (R$)", min_value=0.0, step=0.01, value=0.0)
+                        
+                        # Lógica de cálculo
+                        imp = 0.06
+                        c_fixo = 1.00
+                        if mkt_venda == "shein":
+                            com, tax = 0.18, 5.0
+                        elif mkt_venda == "shopee":
+                            com, tax = 0.20, (4.0 if v_custo_base < 50 else 20.0)
+                        else:
+                            com, tax = 0.0, 0.0
+
+                        lucro_un_calc = v_preco_venda - (v_preco_venda * com) - (v_preco_venda * imp) - v_custo_base - c_fixo - tax
+                        v_margem_auto = (lucro_un_calc / v_preco_venda * 100) if v_preco_venda > 0 else 0.0
+                        st.write(f"Margem: **{v_margem_auto:.2f}%**")
+                        
                     with c_v3:
                         v_data = st.date_input("Data da Venda", value=datetime.now())
-                        lucro_un_calc = v_preco_venda * (v_margem_manual / 100)
                         lucro_total_dinamico = lucro_un_calc * v_qtd
-                        st.metric("Lucro Estimado Total", f"R$ {lucro_total_dinamico:.2f}")
+                        st.metric("Lucro Total", f"R$ {lucro_total_dinamico:.2f}")
 
-                    if st.button("🚀 Confirmar e Registrar Venda", type="primary"):
-                        try:
-                            aba_vendas = planilha.worksheet("vendas_realizadas")
-                            data_str = v_data.strftime("%d/%m/%Y")
-                            aba_vendas.append_row([
-                                v_nome_final, v_sku_final, str(v_preco_venda).replace('.',','), 
-                                int(v_qtd), data_str, str(round(lucro_total_dinamico,2)).replace('.',',')
-                            ])
-                            st.cache_resource.clear()
-                            st.success(f"Venda registrada!")
-                            st.rerun()
-                        except Exception as e: st.error(f"Erro: {e}")
-            else: st.warning("Nenhum produto cadastrado.")
+                    # --- BOTÃO COM BLINDAGEM ---
+                    if not st.session_state.processando_venda:
+                        if st.button("🚀 Confirmar e Registrar Venda", type="primary"):
+                            st.session_state.processando_venda = True
+                            try:
+                                with st.spinner("Gravando..."):
+                                    aba_vendas = planilha.worksheet("vendas_realizadas")
+                                    data_str = v_data.strftime("%d/%m/%Y")
+                                    
+                                    aba_vendas.append_row([
+                                        v_nome_final, 
+                                        v_sku_final, 
+                                        str(v_preco_venda).replace('.',','), 
+                                        int(v_qtd), 
+                                        data_str, 
+                                        str(round(lucro_total_dinamico,2)).replace('.',',')
+                                    ])
+                                    st.cache_resource.clear()
+                                    st.session_state.processando_venda = False
+                                    st.rerun()
+                            except Exception as e:
+                                st.session_state.processando_venda = False
+                                st.error(f"Erro: {e}")
+                    else:
+                        st.button("⏳ Processando...", disabled=True)
+
+        # --- SEÇÃO DE GRÁFICOS E HISTÓRICO (FORA DO EXPANDER) ---
+        st.divider()
+        try:
+            aba_inst_vendas = planilha.worksheet("vendas_realizadas")
+            dados_vendas = aba_inst_vendas.get_all_values()
+            if len(dados_vendas) > 1:
+                df_vendas = pd.DataFrame(dados_vendas[1:], columns=dados_vendas[0])
+                df_vendas['Preço Venda'] = df_vendas['Preço Venda'].apply(converter_custo_seguro)
+                df_vendas['Lucro Total'] = df_vendas['Lucro Total'].apply(converter_custo_seguro)
+                df_vendas['Quantidade'] = pd.to_numeric(df_vendas['Quantidade'])
+                df_vendas['Faturamento'] = df_vendas['Preço Venda'] * df_vendas['Quantidade']
+                df_vendas['Data'] = pd.to_datetime(df_vendas['Data'], dayfirst=True)
+                
+                # Resumo de Métricas
+                c1, c2, c3 = st.columns(3)
+                c1.metric("Faturamento Total", f"R$ {df_vendas['Faturamento'].sum():.2f}")
+                c2.metric("Lucro Líquido Total", f"R$ {df_vendas['Lucro Total'].sum():.2f}")
+                c3.metric("Itens Vendidos", int(df_vendas['Quantidade'].sum()))
+
+                # Aqui você pode continuar com o código do Plotly e da Tabela de Histórico...
+                # Certifique-se de manter a indentação alinhada com este bloco.
+            else:
+                st.info("Nenhuma venda registrada ainda.")
+        except Exception as e:
+            st.error(f"Erro ao carregar gráficos: {e}")             
 
         # --- SEÇÃO DO GRÁFICO ---
         st.divider()
@@ -433,29 +524,71 @@ if st.session_state.logado and planilha:
                 df_diario = df_diario.sort_values(by='Data')
                 df_diario['Data_Label'] = df_diario['Data'].dt.strftime('%d/%m')
 
+# --- SEÇÃO DO GRÁFICO (DENTRO DO BLOCO DE VENDAS) ---
                 st.subheader("📈 Faturamento vs Lucro Líquido (Por Dia)")
 
-                # Container com Borda Real para o Gráfico
                 with st.container():
                     st.markdown('<div class="plot-container">', unsafe_allow_html=True)
                     fig = go.Figure()
+                    
+                    # Barra de Custos
                     fig.add_trace(go.Bar(
-                        x=df_diario['Data_Label'], y=df_diario['Outros Custos'], name='Outros Custos',
-                        marker_color='#FFF9E6', hovertemplate='<b>Outros Custos</b><br>Data: %{x}<br>Valor: R$ %{y:,.2f}<extra></extra>'
+                        x=df_diario['Data_Label'], 
+                        y=df_diario['Outros Custos'], 
+                        name='Outros Custos',
+                        marker_color='#FFF9E6',
+                        # Deixa apenas o valor no hover, sem a data (x)
+                        hovertemplate='R$ %{y:,.2f}<extra></extra>' 
                     ))
+                    
+                    # Barra de Lucro
                     fig.add_trace(go.Bar(
-                        x=df_diario['Data_Label'], y=df_diario['Lucro Total'], name='Lucro Líquido',
-                        marker_color='#FFD700', hovertemplate='<b>Lucro Líquido</b><br>Data: %{x}<br>Valor: R$ %{y:,.2f}<extra></extra>',
-                        text=df_diario['Lucro Total'].apply(lambda x: f'R$ {x:,.2f}'), textposition='outside'
+                        x=df_diario['Data_Label'], 
+                        y=df_diario['Lucro Total'], 
+                        name='Lucro Líquido',
+                        marker_color='#FFD700',
+                        # Deixa apenas o valor no hover, sem a data (x)
+                        hovertemplate='R$ %{y:,.2f}<extra></extra>', 
+                        text=df_diario['Lucro Total'].apply(lambda x: f'R$ {x:,.2f}'), 
+                        textposition='outside'
                     ))
+                    
                     fig.update_layout(
-                        barmode='stack', paper_bgcolor='white', plot_bgcolor='white',
-                        yaxis=dict(showgrid=False, zeroline=False, showticklabels=False, fixedrange=True),
-                        xaxis=dict(showgrid=False, zeroline=False),
-                        margin=dict(l=10, r=10, t=40, b=10),
-                        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5),
-                        font=dict(color="#31333F"), hovermode='x'
+                        barmode='stack', 
+                        paper_bgcolor='white', 
+                        plot_bgcolor='white',
+                        # Ajuste do Eixo Y (Lateral)
+                        yaxis=dict(
+                            showgrid=False, 
+                            zeroline=False, 
+                            showticklabels=False, 
+                            fixedrange=True
+                        ),
+                        # Ajuste do Eixo X (Datas) - FORÇANDO VISIBILIDADE
+                        xaxis=dict(
+                            title="Dias", 
+                            showgrid=False, 
+                            zeroline=False,
+                            showline=True,        # Mostra a linha do eixo
+                            linecolor='black',    # Cor da linha do eixo
+                            tickfont=dict(color='black', size=12), # Cor e tamanho da data
+                            tickmode='linear'
+                        ), 
+                        # Ajuste da Legenda
+                        legend=dict(
+                            orientation="h", 
+                            yanchor="bottom", 
+                            y=1.1,               # Sobe um pouco a legenda para não sumir
+                            xanchor="center", 
+                            x=0.5,
+                            font=dict(color="black") # Garante cor preta na legenda
+                        ),
+                        # Margens: aumentei a margem inferior (b) e superior (t) para o texto não cortar
+                        margin=dict(l=10, r=10, t=60, b=60), 
+                        font=dict(color="#31333F"),
+                        hovermode='closest' 
                     )
+                    
                     st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
                     st.markdown('</div>', unsafe_allow_html=True)
 
