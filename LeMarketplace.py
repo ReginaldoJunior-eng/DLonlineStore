@@ -13,7 +13,7 @@ import plotly.graph_objects as go # Importando Plotly
 
 # --- CONFIGURAÇÕES DE PÁGINA ---
 st.set_page_config(
-    page_title="Leandro Marketplace", 
+    page_title="D.L Online Store", 
     page_icon="🛒", # <--- ALTERE AQUI (Pode colar o emoji do carrinho)
     layout="wide", 
     initial_sidebar_state="expanded"
