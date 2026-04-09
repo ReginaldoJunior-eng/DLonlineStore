@@ -392,22 +392,70 @@ if st.session_state.logado and planilha:
 
     elif st.session_state.pg == "Cadastro":
         st.header("📝 Novo Item na Base")
-        with st.form("cad_final"):
+
+        if 'cont_var' not in st.session_state:
+            st.session_state.cont_var = 0
+
+        col_btn1, col_btn2, _ = st.columns([0.8, 0.8, 4])
+        with col_btn1:
+            if st.button("➕ Variante", type="secondary"):
+                st.session_state.cont_var += 1
+                st.rerun()
+        with col_btn2:
+            if st.button("🗑️ Limpar", type="secondary"):
+                st.session_state.cont_var = 0
+                st.rerun()
+
+        with st.form("cad_final", clear_on_submit=True):
             m = st.selectbox("Marketplace", ["shein", "shopee", "temu", "todos"])
-            n = st.text_input("Nome Completo do Produto")
-            s = st.text_input("SKU / Referência Interna")
+            n = st.text_input("Nome Base do Produto")
+            s_base = st.text_input("SKU Base")
             c = st.number_input("Custo Unitário (R$)", min_value=0.01, step=0.01)
-            if st.form_submit_button("Salvar na Planilha", type="primary"):
-                if n and s:
+            
+            lista_variantes = []
+            
+            if st.session_state.cont_var > 0:
+                st.divider()
+                for i in range(st.session_state.cont_var):
+                    c1, c2 = st.columns(2)
+                    with c1:
+                        v_sku = st.text_input(f"SKU da Variante {i+1}", key=f"vsku_{i}")
+                    with c2:
+                        v_char = st.text_input(f"Cor/Tipo {i+1}", key=f"vchar_{i}")
+                    
+                    if v_sku and v_char:
+                        lista_variantes.append({
+                            "nome_completo": f"{n} {v_char}", 
+                            "sku_variante": v_sku
+                        })
+
+            st.divider()
+            
+            if st.form_submit_button("🚀 Salvar Tudo na Planilha", type="primary"):
+                if n and s_base:
                     valor_formatado = str(c).replace('.', ',')
-                    if m == "todos":
-                        for aba in ["shein", "shopee", "temu"]:
-                            planilha.worksheet(aba).append_row([n, s, valor_formatado])
-                        st.success(f"Produto '{n}' salvo em todas as abas!")
-                    else:
-                        planilha.worksheet(m).append_row([n, s, valor_formatado])
-                        st.success(f"Produto '{n}' salvo na aba {m}!")
-                else: st.error("Preencha Nome e SKU.")
+                    
+                    # --- AJUSTE DE ORDEM AQUI ---
+                    # Se sua planilha for [SKU, NOME, VALOR], a ordem é:
+                    # [s_base, n, valor_formatado]
+                    lote_insercao = [[s_base, n, valor_formatado]]
+                    
+                    for item in lista_variantes:
+                        # Seguindo a mesma ordem: SKU primeiro, Nome depois
+                        lote_insercao.append([item['sku_variante'], item['nome_completo'], valor_formatado])
+                    
+                    try:
+                        abas = ["shein", "shopee", "temu"] if m == "todos" else [m]
+                        for aba_nome in abas:
+                            planilha.worksheet(aba_nome).append_rows(lote_insercao)
+                        
+                        st.success(f"✅ Sucesso! Dados salvos na ordem: SKU | Produto | Valor")
+                        st.session_state.cont_var = 0 
+                        st.cache_data.clear()
+                    except Exception as e:
+                        st.error(f"Erro ao salvar: {e}")
+                else:
+                    st.error("Preencha o Nome e SKU Base.")
 
     elif st.session_state.pg == "Dashboard":
         st.header("📊 Dashboard Financeiro")
