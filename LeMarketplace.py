@@ -447,6 +447,7 @@ elif st.session_state.pg == "Cadastro":
         m = st.selectbox("Marketplace", ["shein", "shopee", "temu", "todos"])
         n = st.text_input("Nome Base do Produto")
         s_base = st.text_input("SKU Base")
+        # No BigQuery guardamos como número (float), então não precisa de .replace(',', '.')
         c = st.number_input("Custo Unitário (R$)", min_value=0.01, step=0.01)
         
         lista_variantes = []
@@ -466,23 +467,47 @@ elif st.session_state.pg == "Cadastro":
                     })
 
         st.divider()
-        if st.form_submit_button("🚀 Salvar Tudo na Planilha", type="primary"):
+        # Alterei o texto do botão para "Salvar no Banco de Dados"
+        if st.form_submit_button("🚀 Salvar Tudo no BigQuery", type="primary"):
             if n and s_base:
-                valor_formatado = str(c).replace('.', ',')
-                lote_insercao = [[s_base, n, valor_formatado]]
-                for item in lista_variantes:
-                    lote_insercao.append([item['sku_variante'], item['nome_completo'], valor_formatado])
-                
                 try:
-                    abas = ["shein", "shopee", "temu"] if m == "todos" else [m]
-                    for aba_nome in abas:
-                        planilha.worksheet(aba_nome).append_rows(lote_insercao)
+                    # ID da sua tabela de produtos no BigQuery
+                    table_id_produtos = "leandro-marketplace.DL_Store_Online.tb_produtos"
                     
-                    st.success(f"✅ Sucesso! Dados salvos na ordem: SKU | Produto | Valor")
-                    st.session_state.cont_var = 0 
-                    st.cache_data.clear()
+                    # Preparando a lista de marketplaces
+                    mkt_list = ["shein", "shopee", "temu"] if m == "todos" else [m]
+                    
+                    lote_bq = []
+                    for aba in mkt_list:
+                        # Adiciona o produto base para cada marketplace
+                        lote_bq.append({
+                            "marketplace": aba,
+                            "sku": str(s_base),
+                            "produto": str(n),
+                            "custo_aquisicao": float(c)
+                        })
+                        # Adiciona as variantes para cada marketplace
+                        for var in lista_variantes:
+                            lote_bq.append({
+                                "marketplace": aba,
+                                "sku": str(var['sku_variante']),
+                                "produto": str(var['nome_completo']),
+                                "custo_aquisicao": float(c)
+                            })
+                    
+                    # Envia para o BigQuery
+                    errors = client_bq.insert_rows_json(table_id_produtos, lote_bq)
+                    
+                    if not errors:
+                        st.success(f"✅ Sucesso! {len(lote_bq)} itens salvos no BigQuery.")
+                        st.session_state.cont_var = 0 
+                        st.cache_data.clear()
+                        # st.rerun() # Opcional: descomente se quiser que a página limpe na hora
+                    else:
+                        st.error(f"Erro nas colunas do BigQuery: {errors}")
+                
                 except Exception as e:
-                    st.error(f"Erro ao salvar: {e}")
+                    st.error(f"Erro de conexão: {e}")
             else:
                 st.error("Preencha o Nome e SKU Base.")
 
@@ -534,25 +559,40 @@ elif st.session_state.pg == "Dashboard":
                         lucro_total_dinamico = lucro_un_calc * v_qtd
                         st.metric("Lucro Total", f"R$ {lucro_total_dinamico:.2f}")
 
-                    if not st.session_state.processando_venda:
+                if not st.session_state.processando_venda:
                         if st.button("🚀 Confirmar e Registrar Venda", type="primary"):
                             st.session_state.processando_venda = True
                             try:
+                                # 1. Garanta que o ID da tabela está correto
                                 table_id = "leandro-marketplace.DL_Store_Online.tb_vendas_realizadas"
+                                
+                                # 2. Prepare os dados (Certifique-se que os nomes batem com o Schema do BQ)
                                 row = [{
-                                    "produto": v_nome_final, "sku": v_sku_final,
-                                    "preco_venda": float(v_preco_venda), "quantidade": int(v_qtd),
+                                    "produto": str(v_nome_final), 
+                                    "sku": str(v_sku_final),
+                                    "preco_venda": float(v_preco_venda), 
+                                    "quantidade": int(v_qtd),
                                     "data": v_data.strftime("%Y-%m-%d"),
                                     "lucro_total": float(round(lucro_total_dinamico, 2))
                                 }]
+                                
+                                # 3. Tenta inserir
                                 errors = client_bq.insert_rows_json(table_id, row)
+                                
                                 if not errors:
+                                    st.success("Venda registrada com sucesso!")
                                     st.cache_data.clear()
                                     st.session_state.processando_venda = False
                                     st.rerun()
+                                else:
+                                    # Se houver erro específico de coluna/tipo no BQ, ele mostra aqui
+                                    st.error(f"Erro nas colunas do BigQuery: {errors}")
+                                    st.session_state.processando_venda = False
+                                    
                             except Exception as e:
-                                st.error(f"Erro: {e}")
+                                st.error(f"Erro de conexão: {e}")
                                 st.session_state.processando_venda = False
+
 
         # --- 2. SEÇÃO DE GRÁFICOS E HISTÓRICO (FORA DO EXPANDER) ---
         st.divider()
