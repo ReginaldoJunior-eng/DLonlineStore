@@ -561,7 +561,6 @@ elif st.session_state.pg == "Dashboard":
             df_vendas = client_bq.query(query).to_dataframe()
 
             if not df_vendas.empty:
-                # Normalizando nomes para bater com o seu código visual
                 df_vendas.columns = ['Produto', 'SKU', 'Preço Venda', 'Quantidade', 'Data', 'Lucro Total']
                 df_vendas['Preço Venda'] = pd.to_numeric(df_vendas['Preço Venda'])
                 df_vendas['Lucro Total'] = pd.to_numeric(df_vendas['Lucro Total'])
@@ -569,7 +568,6 @@ elif st.session_state.pg == "Dashboard":
                 df_vendas['Faturamento'] = df_vendas['Preço Venda'] * df_vendas['Quantidade']
                 df_vendas['Data'] = pd.to_datetime(df_vendas['Data'])
                 
-                # Resumo de Métricas Diárias para o Gráfico
                 df_diario = df_vendas.groupby('Data').agg({'Faturamento': 'sum', 'Lucro Total': 'sum'}).reset_index()
                 df_diario['Outros Custos'] = df_diario['Faturamento'] - df_diario['Lucro Total']
                 df_diario = df_diario.sort_values(by='Data')
@@ -580,9 +578,58 @@ elif st.session_state.pg == "Dashboard":
                 with st.container():
                     st.markdown('<div class="plot-container">', unsafe_allow_html=True)
                     fig = go.Figure()
-                    fig.add_trace(go.Bar(x=df_diario['Data_Label'], y=df_diario['Outros Custos'], name='Outros Custos', marker_color='#FFF9E6', hovertemplate='R$ %{y:,.2f}<extra></extra>'))
-                    fig.add_trace(go.Bar(x=df_diario['Data_Label'], y=df_diario['Lucro Total'], name='Lucro Líquido', marker_color='#FFD700', hovertemplate='R$ %{y:,.2f}<extra></extra>', text=df_diario['Lucro Total'].apply(lambda x: f'R$ {x:,.2f}'), textposition='outside'))
-                    fig.update_layout(barmode='stack', paper_bgcolor='white', plot_bgcolor='white', yaxis=dict(showgrid=False, zeroline=False, showticklabels=False, fixedrange=True), xaxis=dict(title="Dias", showgrid=False, showline=True, linecolor='black', tickfont=dict(color='black', size=12)), legend=dict(orientation="h", yanchor="bottom", y=1.1, xanchor="center", x=0.5, font=dict(color="black")), margin=dict(l=10, r=10, t=60, b=60), hovermode='closest')
+                    
+                    # Barra de Custos
+                    fig.add_trace(go.Bar(
+                        x=df_diario['Data_Label'], 
+                        y=df_diario['Outros Custos'], 
+                        name='Outros Custos', 
+                        marker_color='#FFF9E6', 
+                        hovertemplate='R$ %{y:,.2f}<extra></extra>'
+                    ))
+                    
+                    # Barra de Lucro (VALORES NO TOPO E FONTE AUMENTADA)
+                    fig.add_trace(go.Bar(
+                        x=df_diario['Data_Label'], 
+                        y=df_diario['Lucro Total'], 
+                        name='Lucro Líquido', 
+                        marker_color='#FFD700', 
+                        hovertemplate='R$ %{y:,.2f}<extra></extra>', 
+                        text=df_diario['Lucro Total'].apply(lambda x: f'R$ {x:,.2f}'), 
+                        textposition='outside',
+                        textfont=dict(size=14, color='black', family="Arial Black")
+                    ))
+                    
+                    fig.update_layout(
+                        barmode='stack', 
+                        paper_bgcolor='white', 
+                        plot_bgcolor='white', 
+                        yaxis=dict(
+                            showgrid=False, 
+                            zeroline=False, 
+                            showticklabels=False, 
+                            fixedrange=True,
+                            range=[0, df_diario['Faturamento'].max() * 1.3] # Espaço para o texto
+                        ), 
+                        xaxis=dict(
+                            title="Dias", 
+                            showgrid=False, 
+                            showline=True, 
+                            linecolor='black', 
+                            tickfont=dict(color='black', size=14),
+                            tickmode='linear'
+                        ), 
+                        legend=dict(
+                            orientation="h", 
+                            yanchor="bottom", 
+                            y=1.1, 
+                            xanchor="center", 
+                            x=0.5, 
+                            font=dict(color="black", size=14)
+                        ), 
+                        margin=dict(l=10, r=10, t=80, b=60), 
+                        hovermode='closest'
+                    )
                     st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
                     st.markdown('</div>', unsafe_allow_html=True)
 
@@ -599,7 +646,6 @@ elif st.session_state.pg == "Dashboard":
                 st.markdown("""<div style="display: flex; font-weight: bold; background-color: #f8f9fa; padding: 10px 15px; border: 1px solid #e6e6e6; border-radius: 10px 10px 0 0;"><div style="flex: 3;">Produto</div><div style="flex: 2;">SKU</div><div style="flex: 1;">Qtd</div><div style="flex: 2;">Data</div><div style="flex: 2;">Lucro</div><div style="flex: 1;">Ação</div></div>""", unsafe_allow_html=True)
                 st.markdown('<div class="historico-scroll-container">', unsafe_allow_html=True)
                 
-                # Exibição do histórico com botão de excluir (SQL DELETE)
                 for idx, row in df_vendas.iterrows():
                     st.markdown('<div class="linha-historico">', unsafe_allow_html=True)
                     cols = st.columns([3, 2, 1, 2, 2, 1])
@@ -609,7 +655,6 @@ elif st.session_state.pg == "Dashboard":
                     cols[3].write(row['Data'].strftime('%d/%m/%Y'))
                     cols[4].write(f"R$ {row['Lucro Total']:.2f}")
                     if cols[5].button("❌", key=f"del_{idx}"):
-                        # Deleta do BigQuery usando SKU e Data como referência
                         data_str = row['Data'].strftime('%Y-%m-%d')
                         del_query = f"DELETE FROM `leandro-marketplace.DL_Store_Online.tb_vendas_realizadas` WHERE sku = '{row['SKU']}' AND data = '{data_str}' AND lucro_total = {row['Lucro Total']}"
                         client_bq.query(del_query).result()
