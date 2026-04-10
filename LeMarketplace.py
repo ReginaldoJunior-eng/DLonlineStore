@@ -382,17 +382,23 @@ if st.session_state.pg == "Calculadora":
         
         # AJUSTE: O conteúdo da calculadora precisa estar dentro do IF acima
         with col_sel1:
+            # Criamos uma lista garantindo que cada item seja uma string limpa
+            opcoes_produtos = sorted([str(p) for p in df_geral['Produto'].unique()])
+            
             prod_sel = st.selectbox(
                 "Pesquisar Produto", 
-                sorted(df_geral['Produto'].unique()), 
+                opcoes_produtos, 
                 index=None, 
                 placeholder="Digite o produto..."
             )
-        
+            
         with col_sel2:
+            # Fazemos o mesmo para o SKU
+            opcoes_skus = sorted([str(s) for s in df_geral['SKU'].unique()])
+            
             v_sku_sel = st.selectbox(
                 "Pesquisar por SKU", 
-                sorted(df_geral['SKU'].unique()), 
+                opcoes_skus, 
                 index=None, 
                 placeholder="Busque o SKU..."
             )
@@ -432,17 +438,23 @@ elif st.session_state.pg == "Dashboard":
             col_p1, col_p2 = st.columns(2)
             
             with col_p1:
+                # Garante que os nomes sejam strings limpas para evitar o erro de "?"
+                opcoes_produtos_dash = sorted([str(p) for p in df_dash['Produto'].unique()])
+                
                 v_prod_sel = st.selectbox(
                     "Pesquisar por Nome", 
-                    sorted(df_dash['Produto'].unique()), 
+                    opcoes_produtos_dash, 
                     index=None, 
                     placeholder="Busque o Produto..."
                 )
             
             with col_p2:
+                # Garante que os SKUs sejam strings limpas
+                opcoes_skus_dash = sorted([str(s) for s in df_dash['SKU'].unique()])
+                
                 v_sku_sel = st.selectbox(
                     "Pesquisar por SKU", 
-                    sorted(df_dash['SKU'].unique()), 
+                    opcoes_skus_dash, 
                     index=None, 
                     placeholder="Busque o SKU..."
                 )
