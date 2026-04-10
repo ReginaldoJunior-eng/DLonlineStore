@@ -1,10 +1,7 @@
 streamlit
 pandas
-gspread
-oauth2client
-google-auth
-plotly
-xlsxwriter
 google-cloud-bigquery
 google-auth
 pandas-gbq
+plotly
+xlsxwriter
