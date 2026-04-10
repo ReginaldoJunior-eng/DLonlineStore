@@ -1,7 +1,5 @@
 import streamlit as st
 import pandas as pd
-import gspread
-from oauth2client.service_account import ServiceAccountCredentials
 import re
 import urllib.parse
 import json
@@ -9,9 +7,12 @@ import os
 import io
 import base64
 from datetime import datetime
+from google.cloud import bigquery
+from google.oauth2 import service_account
 import plotly.graph_objects as go # Importando Plotly
 if 'processando_venda' not in st.session_state:
     st.session_state.processando_venda = False
+
 
 # --- CONFIGURAÇÕES DE PÁGINA ---
 st.set_page_config(
@@ -112,43 +113,41 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- CONEXÃO COM GOOGLE SHEETS ---
-@st.cache_resource(ttl=3600)
-def conectar_google_sheets():
+# --- CONEXÃO COM BIGQUERY (NOVO BANCO DO LEANDRO) ---
+
+@st.cache_resource
+def conectar_bigquery():
+    from google.cloud import bigquery
     from google.oauth2 import service_account
-    import gspread
-    
-    scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-    sheet_id = "1sWBnF83-z6yrEKxWoJ1IulHNkwSEU6Si6WzNuLxqW44"
-    info = None
 
-    # Tenta carregar via st.secrets (Nuvem)
     try:
-        if "gcp_service_account" in st.secrets:
-            info = dict(st.secrets["gcp_service_account"])
-            if 'private_key' in info and "BEGIN" not in info['private_key']:
-                decoded_key = base64.b64decode(info['private_key']).decode("utf-8")
-                info['private_key'] = decoded_key
-            elif 'private_key' in info:
-                info['private_key'] = info['private_key'].replace('\\n', '\n').strip()
-    except:
-        info = None
+        # 1. Busca os dados do segredo que você configurou
+        info = st.secrets["gcp_service_account"]
 
-    # Tenta carregar via arquivo local (Desktop)
-    if info is None:
-        path_json = r'C:\Users\Junior\Desktop\CodigosPython2\.streamlit\secrets.toml.json'
-        if os.path.exists(path_json):
-            with open(path_json, 'r', encoding='utf-8') as f:
-                info = json.load(f)
+        # 2. Transforma as informações em credenciais válidas
+        creds = service_account.Credentials.from_service_account_info(info)
 
-    if info:
-        try:
-            creds = service_account.Credentials.from_service_account_info(info, scopes=scope)
-            client = gspread.authorize(creds)
-            return client.open_by_key(sheet_id)
-        except Exception as e:
-            st.error(f"Erro na autenticação final: {e}")
-    return None
+        # 3. Cria o cliente do BigQuery usando essas credenciais
+        client = bigquery.Client(credentials=creds, project=info['project_id'])
+        return client
+
+    except Exception as e:
+        st.error(f"Erro ao conectar no BigQuery: {e}")
+        return None
+
+# --- ATENÇÃO: Esta linha abaixo deve ficar fora da função (sem espaços no começo) ---
+client_bq = conectar_bigquery()
+
+#if client_bq:
+#    st.success("Motor do BigQuery ligado com sucesso!")
+#else:
+#    st.error("O motor não ligou. Verifique os segredos.")
+
+# Função para buscar dados (Substitui a buscar_dados_planilha)
+@st.cache_data(ttl=60)
+def buscar_dados_vendas(_client):
+    query = "SELECT * FROM `leandro-marketplace.vendas_loja.vendas_realizadas` ORDER BY data DESC"
+    return _client.query(query).to_dataframe()
 
 @st.cache_data(ttl=60) # PROTEÇÃO: Lê os dados e segura na memória por 60 segundos
 def buscar_dados_planilha(_planilha, nome_aba):
@@ -264,7 +263,7 @@ with st.sidebar:
             st.session_state.logado = False
             st.rerun()
 
-planilha = conectar_google_sheets()
+#planilha = conectar_google_sheets()
 
 # --- PÁGINA INÍCIO ---
 if st.session_state.pg == "Início":
@@ -318,152 +317,182 @@ elif st.session_state.pg == "Contato":
                 mailto = f"mailto:vendas.dlonlinestore@gmail.com?subject={tipo}&body={msg}"
                 st.markdown(f'<a href="{mailto}" style="background-color:#007bff; color:white; padding:10px; border-radius:5px; text-decoration:none;">📧 Abrir E-mail</a>', unsafe_allow_html=True)
 
-# --- ÁREA RESTRITA ---
-if st.session_state.logado and planilha:
-    
-    lista_base_validacao = []
-    for aba_nome in ["shein", "shopee", "temu"]:
-        try:
-            dados_aba_val = planilha.worksheet(aba_nome).get_all_values()
-            if dados_aba_val:
-                df_val = pd.DataFrame(dados_aba_val[1:], columns=dados_aba_val[0])
-                lista_base_validacao.append(df_val)
-        except: pass
-    df_base_completa = pd.concat(lista_base_validacao).drop_duplicates(subset=['SKU']) if lista_base_validacao else pd.DataFrame()
+# --- CONEXÃO COM BIGQUERY (LIGAR O MOTOR) ---
+@st.cache_resource
+def conectar_bigquery():
+    from google.cloud import bigquery
+    from google.oauth2 import service_account
+    try:
+        # Busca os dados do segredo configurado no secrets.toml
+        info = st.secrets["gcp_service_account"]
+        creds = service_account.Credentials.from_service_account_info(info)
+        client = bigquery.Client(credentials=creds, project=info['project_id'])
+        return client
+    except Exception as e:
+        st.error(f"Erro ao conectar no BigQuery: {e}")
+        return None
 
-    if st.session_state.pg == "Calculadora":
-        st.header("📊 Comparativo de Preços")
+# Ativa o cliente globalmente para ser usado pelas funções abaixo
+client_bq = conectar_bigquery()
+
+# --- FUNÇÕES DE BUSCA (DEFINIÇÃO DO MOTOR) ---
+
+def buscar_produtos_bq():
+    if client_bq:
+        query = "SELECT * FROM `leandro-marketplace.DL_Store_Online.tb_produtos`"
+        return client_bq.query(query).to_dataframe()
+    return pd.DataFrame()
+
+def buscar_vendas_resumo_bq():
+    if client_bq:
+        query = """
+        SELECT 
+            SUM(preco_venda * quantidade) as faturamento_total,
+            SUM(Llcro_Total) as lucro_total,
+            SUM(quantidade) as itens_vendidos
+        FROM `leandro-marketplace.DL_Store_Online.tb_vendas_realizadas`
+        """
+        return client_bq.query(query).to_dataframe()
+    return pd.DataFrame()
+
+# --- ÁREA RESTRITA (EXECUÇÃO DA BUSCA) ---
+df_base_completa = pd.DataFrame()
+
+if st.session_state.logado and client_bq:
+    try:
+        # Agora o Python reconhece a função pois ela foi definida acima
+        df_base_completa = buscar_produtos_bq()
+        
         if not df_base_completa.empty:
-            df_geral = df_base_completa.copy()
-            df_geral['Custo_aquisicao_num'] = df_geral['Custo_aquisicao'].apply(converter_custo_seguro)
-            
-            col_sel1, col_sel2 = st.columns(2)
-            with col_sel1:
-                prod_sel = st.selectbox("Pesquisar Produto", df_geral['Produto'].unique(), index=None, placeholder="Digite o produto...")
-            with col_sel2:
-                sku_sel = st.selectbox("Pesquisar SKU", df_geral['SKU'].unique(), index=None, placeholder="Digite o SKU...")
-            
-            final_item = None
-            if sku_sel: final_item = df_geral[df_geral['SKU'] == sku_sel].iloc[0]
-            elif prod_sel: final_item = df_geral[df_geral['Produto'] == prod_sel].iloc[0]
+            df_base_completa = df_base_completa.drop_duplicates(subset=['SKU'])
+    except Exception as e:
+        st.error(f"Erro ao acessar o BigQuery: {e}")
 
-            if final_item is not None:
-                custo_aq = final_item['Custo_aquisicao_num']
-                st.info(f"Selecionado: {final_item['Produto']} | SKU: {final_item['SKU']}")
-                margem_input = st.number_input("Margem de Lucro Desejada (%)", min_value=1.0, value=15.0, step=1.0)
-                p_shein, l_shein = calcular_venda_completo(custo_aq, margem_input, "shein")
-                p_shopee, l_shopee = calcular_venda_completo(custo_aq, margem_input, "shopee")
-                p_temu, l_temu = calcular_venda_completo(custo_aq, margem_input, "temu")
-                st.divider()
-                st.metric("Custo de Aquisição Base", f"R$ {custo_aq:.2f}")
-                res = {"Canal": ["SHEIN", "SHOPEE", "TEMU"], "Preço Sugerido": [f"R$ {p_shein:.2f}", f"R$ {p_shopee:.2f}", f"R$ {p_temu:.2f}"], "Lucro Líquido Real": [f"R$ {l_shein:.2f}", f"R$ {l_shopee:.2f}", f"R$ {l_temu:.2f}"]}
-                st.table(pd.DataFrame(res))
+# --- NAVEGAÇÃO ENTRE PÁGINAS ---
+if st.session_state.pg == "Calculadora":
+    st.header("📊 Comparativo de Preços")
+    if not df_base_completa.empty:
+        df_geral = df_base_completa.copy()
+        df_geral['Custo_aquisicao_num'] = df_geral['Custo_aquisicao'].apply(converter_custo_seguro)
+        
+        col_sel1, col_sel2 = st.columns(2)
+        with col_sel1:
+            prod_sel = st.selectbox("Pesquisar Produto", df_geral['Produto'].unique(), index=None, placeholder="Digite o produto...")
+        with col_sel2:
+            sku_sel = st.selectbox("Pesquisar SKU", df_geral['SKU'].unique(), index=None, placeholder="Digite o SKU...")
+        
+        final_item = None
+        if sku_sel: final_item = df_geral[df_geral['SKU'] == sku_sel].iloc[0]
+        elif prod_sel: final_item = df_geral[df_geral['Produto'] == prod_sel].iloc[0]
 
-    elif st.session_state.pg == "Análise de Vendas":
-        st.header("📈 Análise de Vendas")
-        if not df_base_completa.empty:
-            df_rel = df_base_completa.copy()
-            df_rel['Custo_num'] = df_rel['Custo_aquisicao'].apply(converter_custo_seguro)
+        if final_item is not None:
+            custo_aq = final_item['Custo_aquisicao_num']
+            st.info(f"Selecionado: {final_item['Produto']} | SKU: {final_item['SKU']}")
+            margem_input = st.number_input("Margem de Lucro Desejada (%)", min_value=1.0, value=15.0, step=1.0)
+            p_shein, l_shein = calcular_venda_completo(custo_aq, margem_input, "shein")
+            p_shopee, l_shopee = calcular_venda_completo(custo_aq, margem_input, "shopee")
+            p_temu, l_temu = calcular_venda_completo(custo_aq, margem_input, "temu")
             st.divider()
-            st.subheader("🏆 Inteligência de Mercado (Melhor Margem)")
-            m_alvo = st.slider("Margem para Análise (%)", 1.0, 50.0, 2.0)
-            rank_data = []
-            for _, r in df_rel.iterrows():
-                _, l1 = calcular_venda_completo(r['Custo_num'], m_alvo, "shein")
-                _, l2 = calcular_venda_completo(r['Custo_num'], m_alvo, "shopee")
-                _, l3 = calcular_venda_completo(r['Custo_num'], m_alvo, "temu")
-                max_l = max(l1, l2, l3)
-                rank_data.append({"Produto": r['Produto'], "SKU": r['SKU'], "Lucro Estimado": round(max_l, 2)})
-            
-            df_rank = pd.DataFrame(rank_data).sort_values(by="Lucro Estimado", ascending=False)
-            st.dataframe(df_rank, use_container_width=True)
-            
-            buffer = io.BytesIO()
-            with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
-                df_rank.to_excel(writer, index=False, sheet_name='Ranking_Lucro')
-                writer.close()
-            
-            st.download_button(
-                label="📥 Exportar Ranking (xlsx)",
-                data=buffer.getvalue(),
-                file_name="ranking_lucro_dl_store.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
+            st.metric("Custo de Aquisição Base", f"R$ {custo_aq:.2f}")
+            res = {"Canal": ["SHEIN", "SHOPEE", "TEMU"], "Preço Sugerido": [f"R$ {p_shein:.2f}", f"R$ {p_shopee:.2f}", f"R$ {p_temu:.2f}"], "Lucro Líquido Real": [f"R$ {l_shein:.2f}", f"R$ {l_shopee:.2f}", f"R$ {l_temu:.2f}"]}
+            st.table(pd.DataFrame(res))
 
-    elif st.session_state.pg == "Cadastro":
-        st.header("📝 Novo Item na Base")
+elif st.session_state.pg == "Análise de Vendas":
+    st.header("📈 Análise de Vendas")
+    if not df_base_completa.empty:
+        df_rel = df_base_completa.copy()
+        df_rel['Custo_num'] = df_rel['Custo_aquisicao'].apply(converter_custo_seguro)
+        st.divider()
+        st.subheader("🏆 Inteligência de Mercado (Melhor Margem)")
+        m_alvo = st.slider("Margem para Análise (%)", 1.0, 50.0, 2.0)
+        rank_data = []
+        for _, r in df_rel.iterrows():
+            _, l1 = calcular_venda_completo(r['Custo_num'], m_alvo, "shein")
+            _, l2 = calcular_venda_completo(r['Custo_num'], m_alvo, "shopee")
+            _, l3 = calcular_venda_completo(r['Custo_num'], m_alvo, "temu")
+            max_l = max(l1, l2, l3)
+            rank_data.append({"Produto": r['Produto'], "SKU": r['SKU'], "Lucro Estimado": round(max_l, 2)})
+        
+        df_rank = pd.DataFrame(rank_data).sort_values(by="Lucro Estimado", ascending=False)
+        st.dataframe(df_rank, use_container_width=True)
+        
+        buffer = io.BytesIO()
+        with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
+            df_rank.to_excel(writer, index=False, sheet_name='Ranking_Lucro')
+            writer.close()
+        
+        st.download_button(
+            label="📥 Exportar Ranking (xlsx)",
+            data=buffer.getvalue(),
+            file_name="ranking_lucro_dl_store.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
 
-        if 'cont_var' not in st.session_state:
+elif st.session_state.pg == "Cadastro":
+    st.header("📝 Novo Item na Base")
+    if 'cont_var' not in st.session_state:
+        st.session_state.cont_var = 0
+
+    col_btn1, col_btn2, _ = st.columns([0.8, 0.8, 4])
+    with col_btn1:
+        if st.button("➕ Variante", type="secondary"):
+            st.session_state.cont_var += 1
+            st.rerun()
+    with col_btn2:
+        if st.button("🗑️ Limpar", type="secondary"):
             st.session_state.cont_var = 0
+            st.rerun()
 
-        col_btn1, col_btn2, _ = st.columns([0.8, 0.8, 4])
-        with col_btn1:
-            if st.button("➕ Variante", type="secondary"):
-                st.session_state.cont_var += 1
-                st.rerun()
-        with col_btn2:
-            if st.button("🗑️ Limpar", type="secondary"):
-                st.session_state.cont_var = 0
-                st.rerun()
-
-        with st.form("cad_final", clear_on_submit=True):
-            m = st.selectbox("Marketplace", ["shein", "shopee", "temu", "todos"])
-            n = st.text_input("Nome Base do Produto")
-            s_base = st.text_input("SKU Base")
-            c = st.number_input("Custo Unitário (R$)", min_value=0.01, step=0.01)
-            
-            lista_variantes = []
-            
-            if st.session_state.cont_var > 0:
-                st.divider()
-                for i in range(st.session_state.cont_var):
-                    c1, c2 = st.columns(2)
-                    with c1:
-                        v_sku = st.text_input(f"SKU da Variante {i+1}", key=f"vsku_{i}")
-                    with c2:
-                        v_char = st.text_input(f"Cor/Tipo {i+1}", key=f"vchar_{i}")
-                    
-                    if v_sku and v_char:
-                        lista_variantes.append({
-                            "nome_completo": f"{n} {v_char}", 
-                            "sku_variante": v_sku
-                        })
-
+    with st.form("cad_final", clear_on_submit=True):
+        m = st.selectbox("Marketplace", ["shein", "shopee", "temu", "todos"])
+        n = st.text_input("Nome Base do Produto")
+        s_base = st.text_input("SKU Base")
+        c = st.number_input("Custo Unitário (R$)", min_value=0.01, step=0.01)
+        
+        lista_variantes = []
+        if st.session_state.cont_var > 0:
             st.divider()
-            
-            if st.form_submit_button("🚀 Salvar Tudo na Planilha", type="primary"):
-                if n and s_base:
-                    valor_formatado = str(c).replace('.', ',')
-                    
-                    # --- AJUSTE DE ORDEM AQUI ---
-                    # Se sua planilha for [SKU, NOME, VALOR], a ordem é:
-                    # [s_base, n, valor_formatado]
-                    lote_insercao = [[s_base, n, valor_formatado]]
-                    
-                    for item in lista_variantes:
-                        # Seguindo a mesma ordem: SKU primeiro, Nome depois
-                        lote_insercao.append([item['sku_variante'], item['nome_completo'], valor_formatado])
-                    
-                    try:
-                        abas = ["shein", "shopee", "temu"] if m == "todos" else [m]
-                        for aba_nome in abas:
-                            planilha.worksheet(aba_nome).append_rows(lote_insercao)
-                        
-                        st.success(f"✅ Sucesso! Dados salvos na ordem: SKU | Produto | Valor")
-                        st.session_state.cont_var = 0 
-                        st.cache_data.clear()
-                    except Exception as e:
-                        st.error(f"Erro ao salvar: {e}")
-                else:
-                    st.error("Preencha o Nome e SKU Base.")
+            for i in range(st.session_state.cont_var):
+                c1, c2 = st.columns(2)
+                with c1:
+                    v_sku = st.text_input(f"SKU da Variante {i+1}", key=f"vsku_{i}")
+                with c2:
+                    v_char = st.text_input(f"Cor/Tipo {i+1}", key=f"vchar_{i}")
+                
+                if v_sku and v_char:
+                    lista_variantes.append({
+                        "nome_completo": f"{n} {v_char}", 
+                        "sku_variante": v_sku
+                    })
 
-    elif st.session_state.pg == "Dashboard":
+        st.divider()
+        if st.form_submit_button("🚀 Salvar Tudo na Planilha", type="primary"):
+            if n and s_base:
+                valor_formatado = str(c).replace('.', ',')
+                lote_insercao = [[s_base, n, valor_formatado]]
+                for item in lista_variantes:
+                    lote_insercao.append([item['sku_variante'], item['nome_completo'], valor_formatado])
+                
+                try:
+                    abas = ["shein", "shopee", "temu"] if m == "todos" else [m]
+                    for aba_nome in abas:
+                        planilha.worksheet(aba_nome).append_rows(lote_insercao)
+                    
+                    st.success(f"✅ Sucesso! Dados salvos na ordem: SKU | Produto | Valor")
+                    st.session_state.cont_var = 0 
+                    st.cache_data.clear()
+                except Exception as e:
+                    st.error(f"Erro ao salvar: {e}")
+            else:
+                st.error("Preencha o Nome e SKU Base.")
+
+elif st.session_state.pg == "Dashboard":
         st.header("📊 Dashboard Financeiro")
         
-        # 1. Garante que a variável de trava existe
         if 'processando_venda' not in st.session_state:
             st.session_state.processando_venda = False
 
+        # --- 1. REGISTRO DE NOVA VENDA (BIGQUERY) ---
         with st.expander("➕ Registrar Nova Venda", expanded=True):
             if not df_base_completa.empty:
                 df_dash = df_base_completa.copy()
@@ -485,7 +514,6 @@ if st.session_state.logado and planilha:
                     v_nome_final = item_venda['Produto']
                     v_sku_final = item_venda['SKU']
                     v_custo_base = item_venda['Custo_num']
-
                     st.success(f"✅ Item: **{v_nome_final}** | SKU: **{v_sku_final}** | Custo Base: **R$ {v_custo_base:.2f}**")
                     
                     c_v1, c_v2, c_v3 = st.columns(3)
@@ -494,204 +522,102 @@ if st.session_state.logado and planilha:
                         v_qtd = st.number_input("Qtd Vendida", min_value=1, value=1)
                     with c_v2:
                         v_preco_venda = st.number_input("Preço de Venda Praticado (R$)", min_value=0.0, step=0.01, value=0.0)
-                        
-                        # Lógica de cálculo
-                        imp = 0.06
-                        c_fixo = 1.00
-                        if mkt_venda == "shein":
-                            com, tax = 0.18, 5.0
-                        elif mkt_venda == "shopee":
-                            com, tax = 0.20, (4.0 if v_custo_base < 50 else 20.0)
-                        else:
-                            com, tax = 0.0, 0.0
-
+                        imp, c_fixo = 0.06, 1.00
+                        if mkt_venda == "shein": com, tax = 0.18, 5.0
+                        elif mkt_venda == "shopee": com, tax = 0.20, (4.0 if v_custo_base < 50 else 20.0)
+                        else: com, tax = 0.0, 0.0
                         lucro_un_calc = v_preco_venda - (v_preco_venda * com) - (v_preco_venda * imp) - v_custo_base - c_fixo - tax
                         v_margem_auto = (lucro_un_calc / v_preco_venda * 100) if v_preco_venda > 0 else 0.0
                         st.write(f"Margem: **{v_margem_auto:.2f}%**")
-                        
                     with c_v3:
                         v_data = st.date_input("Data da Venda", value=datetime.now())
                         lucro_total_dinamico = lucro_un_calc * v_qtd
                         st.metric("Lucro Total", f"R$ {lucro_total_dinamico:.2f}")
 
-                    # --- BOTÃO COM BLINDAGEM ---
                     if not st.session_state.processando_venda:
                         if st.button("🚀 Confirmar e Registrar Venda", type="primary"):
                             st.session_state.processando_venda = True
                             try:
-                                with st.spinner("Gravando..."):
-                                    aba_vendas = planilha.worksheet("vendas_realizadas")
-                                    data_str = v_data.strftime("%d/%m/%Y")
-                                    
-                                    aba_vendas.append_row([
-                                        v_nome_final, 
-                                        v_sku_final, 
-                                        str(v_preco_venda).replace('.',','), 
-                                        int(v_qtd), 
-                                        data_str, 
-                                        str(round(lucro_total_dinamico,2)).replace('.',',')
-                                    ])
-                                    st.cache_resource.clear()
+                                table_id = "leandro-marketplace.DL_Store_Online.tb_vendas_realizadas"
+                                row = [{
+                                    "produto": v_nome_final, "sku": v_sku_final,
+                                    "preco_venda": float(v_preco_venda), "quantidade": int(v_qtd),
+                                    "data": v_data.strftime("%Y-%m-%d"),
+                                    "lucro_total": float(round(lucro_total_dinamico, 2))
+                                }]
+                                errors = client_bq.insert_rows_json(table_id, row)
+                                if not errors:
+                                    st.cache_data.clear()
                                     st.session_state.processando_venda = False
                                     st.rerun()
                             except Exception as e:
-                                st.session_state.processando_venda = False
                                 st.error(f"Erro: {e}")
-                    else:
-                        st.button("⏳ Processando...", disabled=True)
+                                st.session_state.processando_venda = False
 
-        # --- SEÇÃO DE GRÁFICOS E HISTÓRICO (FORA DO EXPANDER) ---
+        # --- 2. SEÇÃO DE GRÁFICOS E HISTÓRICO (FORA DO EXPANDER) ---
         st.divider()
         try:
-            dados_vendas = buscar_dados_planilha(planilha, "vendas_realizadas")
-            if len(dados_vendas) > 1:
-                df_vendas = pd.DataFrame(dados_vendas[1:], columns=dados_vendas[0])
-                df_vendas['Preço Venda'] = df_vendas['Preço Venda'].apply(converter_custo_seguro)
-                df_vendas['Lucro Total'] = df_vendas['Lucro Total'].apply(converter_custo_seguro)
+            query = "SELECT * FROM `leandro-marketplace.DL_Store_Online.tb_vendas_realizadas` ORDER BY data DESC"
+            df_vendas = client_bq.query(query).to_dataframe()
+
+            if not df_vendas.empty:
+                # Normalizando nomes para bater com o seu código visual
+                df_vendas.columns = ['Produto', 'SKU', 'Preço Venda', 'Quantidade', 'Data', 'Lucro Total']
+                df_vendas['Preço Venda'] = pd.to_numeric(df_vendas['Preço Venda'])
+                df_vendas['Lucro Total'] = pd.to_numeric(df_vendas['Lucro Total'])
                 df_vendas['Quantidade'] = pd.to_numeric(df_vendas['Quantidade'])
                 df_vendas['Faturamento'] = df_vendas['Preço Venda'] * df_vendas['Quantidade']
-                df_vendas['Data'] = pd.to_datetime(df_vendas['Data'], dayfirst=True)
+                df_vendas['Data'] = pd.to_datetime(df_vendas['Data'])
                 
-                # Resumo de Métricas
-                c1, c2, c3 = st.columns(3)
-                c1.metric("Faturamento Total", f"R$ {df_vendas['Faturamento'].sum():.2f}")
-                c2.metric("Lucro Líquido Total", f"R$ {df_vendas['Lucro Total'].sum():.2f}")
-                c3.metric("Itens Vendidos", int(df_vendas['Quantidade'].sum()))
-
-                # Aqui você pode continuar com o código do Plotly e da Tabela de Histórico...
-                # Certifique-se de manter a indentação alinhada com este bloco.
-            else:
-                st.info("Nenhuma venda registrada ainda.")
-        except Exception as e:
-            st.error(f"Erro ao carregar gráficos: {e}")             
-
-        # --- SEÇÃO DO GRÁFICO ---
-        st.divider()
-        try:
-            aba_inst_vendas = planilha.worksheet("vendas_realizadas")
-            dados_vendas = aba_inst_vendas.get_all_values()
-            if len(dados_vendas) > 1:
-                df_vendas = pd.DataFrame(dados_vendas[1:], columns=dados_vendas[0])
-                df_vendas['Preço Venda'] = df_vendas['Preço Venda'].apply(converter_custo_seguro)
-                df_vendas['Lucro Total'] = df_vendas['Lucro Total'].apply(converter_custo_seguro)
-                df_vendas['Quantidade'] = pd.to_numeric(df_vendas['Quantidade'])
-                df_vendas['Faturamento'] = df_vendas['Preço Venda'] * df_vendas['Quantidade']
-                df_vendas['Data'] = pd.to_datetime(df_vendas['Data'], dayfirst=True)
-                
+                # Resumo de Métricas Diárias para o Gráfico
                 df_diario = df_vendas.groupby('Data').agg({'Faturamento': 'sum', 'Lucro Total': 'sum'}).reset_index()
                 df_diario['Outros Custos'] = df_diario['Faturamento'] - df_diario['Lucro Total']
                 df_diario = df_diario.sort_values(by='Data')
                 df_diario['Data_Label'] = df_diario['Data'].dt.strftime('%d/%m')
 
-# --- SEÇÃO DO GRÁFICO (DENTRO DO BLOCO DE VENDAS) ---
+                # --- SEÇÃO DO GRÁFICO ---
                 st.subheader("📈 Faturamento vs Lucro Líquido (Por Dia)")
-
                 with st.container():
                     st.markdown('<div class="plot-container">', unsafe_allow_html=True)
                     fig = go.Figure()
-                    
-                    # Barra de Custos
-                    fig.add_trace(go.Bar(
-                        x=df_diario['Data_Label'], 
-                        y=df_diario['Outros Custos'], 
-                        name='Outros Custos',
-                        marker_color='#FFF9E6',
-                        # Deixa apenas o valor no hover, sem a data (x)
-                        hovertemplate='R$ %{y:,.2f}<extra></extra>' 
-                    ))
-                    
-                    # Barra de Lucro
-                    fig.add_trace(go.Bar(
-                        x=df_diario['Data_Label'], 
-                        y=df_diario['Lucro Total'], 
-                        name='Lucro Líquido',
-                        marker_color='#FFD700',
-                        # Deixa apenas o valor no hover, sem a data (x)
-                        hovertemplate='R$ %{y:,.2f}<extra></extra>', 
-                        text=df_diario['Lucro Total'].apply(lambda x: f'R$ {x:,.2f}'), 
-                        textposition='outside'
-                    ))
-                    
-                fig.update_layout(
-                        barmode='stack', 
-                        paper_bgcolor='white', 
-                        plot_bgcolor='white',
-                        # Ajuste do Eixo Y (Lateral)
-                        yaxis=dict(
-                            showgrid=False, 
-                            zeroline=False, 
-                            showticklabels=False, 
-                            fixedrange=True
-                        ),
-                        # Ajuste do Eixo X (Datas) - FORÇANDO VISIBILIDADE
-                        xaxis=dict(
-                            title="Dias", 
-                            showgrid=False, 
-                            zeroline=False,
-                            showline=True,        # Mostra a linha do eixo
-                            linecolor='black',    # Cor da linha do eixo
-                            tickfont=dict(color='black', size=12), # Cor e tamanho da data
-                            tickmode='linear'
-                        ), 
-                        # Ajuste da Legenda
-                        legend=dict(
-                            orientation="h", 
-                            yanchor="bottom", 
-                            y=1.1,               # Sobe um pouco a legenda para não sumir
-                            xanchor="center", 
-                            x=0.5,
-                            font=dict(color="black") # Garante cor preta na legenda
-                        ),
-                        # Margens: aumentei a margem inferior (b) e superior (t) para o texto não cortar
-                        margin=dict(l=10, r=10, t=60, b=60), 
-                        font=dict(color="#31333F"),
-                        hovermode='closest' 
-                    )
-                    
-                st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
-                st.markdown('</div>', unsafe_allow_html=True)
+                    fig.add_trace(go.Bar(x=df_diario['Data_Label'], y=df_diario['Outros Custos'], name='Outros Custos', marker_color='#FFF9E6', hovertemplate='R$ %{y:,.2f}<extra></extra>'))
+                    fig.add_trace(go.Bar(x=df_diario['Data_Label'], y=df_diario['Lucro Total'], name='Lucro Líquido', marker_color='#FFD700', hovertemplate='R$ %{y:,.2f}<extra></extra>', text=df_diario['Lucro Total'].apply(lambda x: f'R$ {x:,.2f}'), textposition='outside'))
+                    fig.update_layout(barmode='stack', paper_bgcolor='white', plot_bgcolor='white', yaxis=dict(showgrid=False, zeroline=False, showticklabels=False, fixedrange=True), xaxis=dict(title="Dias", showgrid=False, showline=True, linecolor='black', tickfont=dict(color='black', size=12)), legend=dict(orientation="h", yanchor="bottom", y=1.1, xanchor="center", x=0.5, font=dict(color="black")), margin=dict(l=10, r=10, t=60, b=60), hovermode='closest')
+                    st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
+                    st.markdown('</div>', unsafe_allow_html=True)
 
-                # Métricas e Histórico
-                st.write("")
+                # Resumo de Métricas Gerais
                 c1, c2, c3 = st.columns(3)
                 c1.metric("Faturamento Total", f"R$ {df_vendas['Faturamento'].sum():.2f}")
                 margem_geral = (df_vendas['Lucro Total'].sum()/df_vendas['Faturamento'].sum()*100) if df_vendas['Faturamento'].sum() > 0 else 0
                 c2.metric("Lucro Líquido Total", f"R$ {df_vendas['Lucro Total'].sum():.2f}", delta=f"{margem_geral:.1f}% margem")
                 c3.metric("Itens Vendidos", int(df_vendas['Quantidade'].sum()))
 
+                # --- HISTÓRICO E GERENCIAMENTO ---
                 st.divider()
                 st.subheader("📋 Histórico e Gerenciamento")
-                
-                # Cabeçalho Fixo (Fora do Scroll para ficar visível)
-                st.markdown("""
-                    <div style="display: flex; font-weight: bold; background-color: #f8f9fa; padding: 10px 15px; border: 1px solid #e6e6e6; border-bottom: 2px solid #e6e6e6; border-radius: 10px 10px 0 0;">
-                        <div style="flex: 3;">Produto</div>
-                        <div style="flex: 2;">SKU</div>
-                        <div style="flex: 1;">Qtd</div>
-                        <div style="flex: 2;">Data</div>
-                        <div style="flex: 2;">Lucro</div>
-                        <div style="flex: 1;">Ação</div>
-                    </div>
-                """, unsafe_allow_html=True)
-
-                # --- TABELA DE HISTÓRICO COM SCROLL E LATERAIS ---
+                st.markdown("""<div style="display: flex; font-weight: bold; background-color: #f8f9fa; padding: 10px 15px; border: 1px solid #e6e6e6; border-radius: 10px 10px 0 0;"><div style="flex: 3;">Produto</div><div style="flex: 2;">SKU</div><div style="flex: 1;">Qtd</div><div style="flex: 2;">Data</div><div style="flex: 2;">Lucro</div><div style="flex: 1;">Ação</div></div>""", unsafe_allow_html=True)
                 st.markdown('<div class="historico-scroll-container">', unsafe_allow_html=True)
                 
-                df_exibicao = df_vendas.copy().reset_index()
-                for idx, row in df_exibicao[::-1].iterrows():
-                    st.markdown(f'<div class="linha-historico">', unsafe_allow_html=True)
+                # Exibição do histórico com botão de excluir (SQL DELETE)
+                for idx, row in df_vendas.iterrows():
+                    st.markdown('<div class="linha-historico">', unsafe_allow_html=True)
                     cols = st.columns([3, 2, 1, 2, 2, 1])
                     cols[0].write(row['Produto'])
                     cols[1].write(f"`{row['SKU']}`")
-                    cols[2].write(str(row['Quantidade']))
+                    cols[2].write(str(int(row['Quantidade'])))
                     cols[3].write(row['Data'].strftime('%d/%m/%Y'))
                     cols[4].write(f"R$ {row['Lucro Total']:.2f}")
                     if cols[5].button("❌", key=f"del_{idx}"):
-                        aba_inst_vendas.delete_rows(row['index'] + 2)
-                        st.success("Venda removida!")
+                        # Deleta do BigQuery usando SKU e Data como referência
+                        data_str = row['Data'].strftime('%Y-%m-%d')
+                        del_query = f"DELETE FROM `leandro-marketplace.DL_Store_Online.tb_vendas_realizadas` WHERE sku = '{row['SKU']}' AND data = '{data_str}' AND lucro_total = {row['Lucro Total']}"
+                        client_bq.query(del_query).result()
+                        st.cache_data.clear()
                         st.rerun()
                     st.markdown('</div>', unsafe_allow_html=True)
                 st.markdown('</div>', unsafe_allow_html=True)
-                
-            else: st.info("Nenhuma venda registrada ainda.")
-        except Exception as e: st.warning(f"Erro ao carregar dados: {e}")
+            else:
+                st.info("Nenhuma venda registrada ainda.")
+        except Exception as e:
+            st.error(f"Erro ao carregar Dashboard: {e}")
