@@ -373,29 +373,78 @@ if st.session_state.pg == "Calculadora":
     st.header("📊 Comparativo de Preços")
     if not df_base_completa.empty:
         df_geral = df_base_completa.copy()
+        # Garante que o custo seja numérico
         df_geral['Custo_aquisicao_num'] = df_geral['Custo_aquisicao'].apply(converter_custo_seguro)
         
+        # 1. Definimos os nomes das colunas como col_sel1 e col_sel2
         col_sel1, col_sel2 = st.columns(2)
-        with col_sel1:
-            prod_sel = st.selectbox("Pesquisar Produto", df_geral['Produto'].unique(), index=None, placeholder="Digite o produto...")
-        with col_sel2:
-            sku_sel = st.selectbox("Pesquisar SKU", df_geral['SKU'].unique(), index=None, placeholder="Digite o SKU...")
         
+        # AJUSTE: O conteúdo da calculadora precisa estar dentro do IF acima
+        with col_sel1:
+            prod_sel = st.selectbox(
+                "Pesquisar Produto", 
+                sorted(df_geral['Produto'].unique()), 
+                index=None, 
+                placeholder="Digite o produto..."
+            )
+        
+        with col_sel2:
+            v_sku_sel = st.selectbox(
+                "Pesquisar por SKU", 
+                sorted(df_geral['SKU'].unique()), 
+                index=None, 
+                placeholder="Busque o SKU..."
+            )
+
+        # O final_item e os cálculos precisam estar alinhados com o "if not df_base_completa.empty"
         final_item = None
-        if sku_sel: final_item = df_geral[df_geral['SKU'] == sku_sel].iloc[0]
-        elif prod_sel: final_item = df_geral[df_geral['Produto'] == prod_sel].iloc[0]
+        if v_sku_sel: 
+            final_item = df_geral[df_geral['SKU'] == v_sku_sel].iloc[0]
+        elif prod_sel: 
+            final_item = df_geral[df_geral['Produto'] == prod_sel].iloc[0]
 
         if final_item is not None:
             custo_aq = final_item['Custo_aquisicao_num']
             st.info(f"Selecionado: {final_item['Produto']} | SKU: {final_item['SKU']}")
             margem_input = st.number_input("Margem de Lucro Desejada (%)", min_value=1.0, value=15.0, step=1.0)
+            
             p_shein, l_shein = calcular_venda_completo(custo_aq, margem_input, "shein")
             p_shopee, l_shopee = calcular_venda_completo(custo_aq, margem_input, "shopee")
             p_temu, l_temu = calcular_venda_completo(custo_aq, margem_input, "temu")
+            
             st.divider()
             st.metric("Custo de Aquisição Base", f"R$ {custo_aq:.2f}")
-            res = {"Canal": ["SHEIN", "SHOPEE", "TEMU"], "Preço Sugerido": [f"R$ {p_shein:.2f}", f"R$ {p_shopee:.2f}", f"R$ {p_temu:.2f}"], "Lucro Líquido Real": [f"R$ {l_shein:.2f}", f"R$ {l_shopee:.2f}", f"R$ {l_temu:.2f}"]}
+            res = {
+                "Canal": ["SHEIN", "SHOPEE", "TEMU"], 
+                "Preço Sugerido": [f"R$ {p_shein:.2f}", f"R$ {p_shopee:.2f}", f"R$ {p_temu:.2f}"], 
+                "Lucro Líquido Real": [f"R$ {l_shein:.2f}", f"R$ {l_shopee:.2f}", f"R$ {l_temu:.2f}"]
+            }
             st.table(pd.DataFrame(res))
+
+# --- SEÇÃO DO DASHBOARD (Separada da Calculadora) ---
+elif st.session_state.pg == "Dashboard":
+    with st.expander("➕ Registrar Nova Venda", expanded=True):
+        if not df_base_completa.empty:
+            df_dash = df_base_completa.copy()
+            df_dash['Custo_num'] = df_dash['Custo_aquisicao'].apply(converter_custo_seguro)
+            
+            col_p1, col_p2 = st.columns(2)
+            
+            with col_p1:
+                v_prod_sel = st.selectbox(
+                    "Pesquisar por Nome", 
+                    sorted(df_dash['Produto'].unique()), 
+                    index=None, 
+                    placeholder="Busque o Produto..."
+                )
+            
+            with col_p2:
+                v_sku_sel = st.selectbox(
+                    "Pesquisar por SKU", 
+                    sorted(df_dash['SKU'].unique()), 
+                    index=None, 
+                    placeholder="Busque o SKU..."
+                )
 
 elif st.session_state.pg == "Análise de Vendas":
     st.header("📈 Análise de Vendas")
@@ -524,11 +573,24 @@ elif st.session_state.pg == "Dashboard":
                 df_dash['Custo_num'] = df_dash['Custo_aquisicao'].apply(converter_custo_seguro)
                 
                 col_p1, col_p2 = st.columns(2)
-                with col_p1:
-                    v_prod_sel = st.selectbox("Pesquisar por Nome", sorted(df_dash['Produto'].unique()), index=None, placeholder="Busque o Produto...")
-                with col_p2:
-                    v_sku_sel = st.selectbox("Pesquisar por SKU", sorted(df_dash['SKU'].unique()), index=None, placeholder="Busque o SKU...")
                 
+                with col_p1:
+                    # Aplicado sorted() para ordem alfabética no Nome
+                    v_prod_sel = st.selectbox(
+                        "Pesquisar por Nome", 
+                        sorted(df_dash['Produto'].unique()), 
+                        index=None, 
+                        placeholder="Busque o Produto..."
+                    )
+                
+                with col_p2:
+                    # Aplicado sorted() para ordem alfabética no SKU
+                    v_sku_sel = st.selectbox(
+                        "Pesquisar por SKU", 
+                        sorted(df_dash['SKU'].unique()), 
+                        index=None, 
+                        placeholder="Busque o SKU..."
+                    )
                 item_venda = None
                 if v_sku_sel: 
                     item_venda = df_dash[df_dash['SKU'] == v_sku_sel].iloc[0]
