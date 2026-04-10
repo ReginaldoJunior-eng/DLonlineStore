@@ -1,2 +1,4 @@
+.streamlit/secrets.toml
 *.json
-leandro-marketplace-db68edb58be7.json
+__pycache__/
+.env
