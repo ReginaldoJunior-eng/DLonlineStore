@@ -428,37 +428,6 @@ if st.session_state.pg == "Calculadora":
             }
             st.table(pd.DataFrame(res))
 
-# --- SEÇÃO DO DASHBOARD (Separada da Calculadora) ---
-elif st.session_state.pg == "Dashboard":
-    with st.expander("➕ Registrar Nova Venda", expanded=True):
-        if not df_base_completa.empty:
-            df_dash = df_base_completa.copy()
-            df_dash['Custo_num'] = df_dash['Custo_aquisicao'].apply(converter_custo_seguro)
-            
-            col_p1, col_p2 = st.columns(2)
-            
-            with col_p1:
-                # Garante que os nomes sejam strings limpas para evitar o erro de "?"
-                opcoes_produtos_dash = sorted([str(p) for p in df_dash['Produto'].unique()])
-                
-                v_prod_sel = st.selectbox(
-                    "Pesquisar por Nome", 
-                    opcoes_produtos_dash, 
-                    index=None, 
-                    placeholder="Busque o Produto..."
-                )
-            
-            with col_p2:
-                # Garante que os SKUs sejam strings limpas
-                opcoes_skus_dash = sorted([str(s) for s in df_dash['SKU'].unique()])
-                
-                v_sku_sel = st.selectbox(
-                    "Pesquisar por SKU", 
-                    opcoes_skus_dash, 
-                    index=None, 
-                    placeholder="Busque o SKU..."
-                )
-
 elif st.session_state.pg == "Análise de Vendas":
     st.header("📈 Análise de Vendas")
     if not df_base_completa.empty:
@@ -573,6 +542,84 @@ elif st.session_state.pg == "Cadastro":
             else:
                 st.error("Preencha o Nome e SKU Base.")
 
+# --- SEÇÃO DO DASHBOARD (BUSCA POR NOME -> AUTO SKU) ---
+# --- SEÇÃO DE CADASTRO ---
+elif st.session_state.pg == "Cadastro":
+    st.header("📝 Novo Item na Base")
+    if 'cont_var' not in st.session_state:
+        st.session_state.cont_var = 0
+
+    col_btn1, col_btn2, _ = st.columns([0.8, 0.8, 4])
+    with col_btn1:
+        if st.button("➕ Variante", type="secondary"):
+            st.session_state.cont_var += 1
+            st.rerun()
+    with col_btn2:
+        if st.button("🗑️ Limpar", type="secondary"):
+            st.session_state.cont_var = 0
+            st.rerun()
+
+    with st.form("cad_final", clear_on_submit=True):
+        m = st.selectbox("Marketplace", ["shein", "shopee", "temu", "todos"])
+        n = st.text_input("Nome Base do Produto")
+        s_base = st.text_input("SKU Base")
+        # No BigQuery guardamos como número (float), então não precisa de .replace(',', '.')
+        c = st.number_input("Custo Unitário (R$)", min_value=0.01, step=0.01)
+        
+        lista_variantes = []
+        if st.session_state.cont_var > 0:
+            st.divider()
+            for i in range(st.session_state.cont_var):
+                c1, c2 = st.columns(2)
+                with c1:
+                    v_sku = st.text_input(f"SKU da Variante {i+1}", key=f"vsku_{i}")
+                with c2:
+                    v_char = st.text_input(f"Cor/Tipo {i+1}", key=f"vchar_{i}")
+                
+                if v_sku and v_char:
+                    lista_variantes.append({
+                        "nome_completo": f"{n} {v_char}", 
+                        "sku_variante": v_sku
+                    })
+
+        st.divider()
+        if st.form_submit_button("🚀 Salvar Tudo no BigQuery", type="primary"):
+            if n and s_base:
+                try:
+                    table_id_produtos = "leandro-marketplace.DL_Store_Online.tb_produtos"
+                    mkt_list = ["shein", "shopee", "temu"] if m == "todos" else [m]
+                    
+                    lote_bq = []
+                    for aba in mkt_list:
+                        lote_bq.append({
+                            "marketplace": aba,
+                            "sku": str(s_base),
+                            "produto": str(n),
+                            "custo_aquisicao": float(c)
+                        })
+                        for var in lista_variantes:
+                            lote_bq.append({
+                                "marketplace": aba,
+                                "sku": str(var['sku_variante']),
+                                "produto": str(var['nome_completo']),
+                                "custo_aquisicao": float(c)
+                            })
+                    
+                    errors = client_bq.insert_rows_json(table_id_produtos, lote_bq)
+                    
+                    if not errors:
+                        st.success(f"✅ Sucesso! {len(lote_bq)} itens salvos no BigQuery.")
+                        st.session_state.cont_var = 0 
+                        st.cache_data.clear()
+                    else:
+                        st.error(f"Erro nas colunas do BigQuery: {errors}")
+                
+                except Exception as e:
+                    st.error(f"Erro de conexão: {e}")
+            else:
+                st.error("Preencha o Nome e SKU Base.")
+
+# --- SEÇÃO DO DASHBOARD ---
 elif st.session_state.pg == "Dashboard":
         st.header("📊 Dashboard Financeiro")
         
