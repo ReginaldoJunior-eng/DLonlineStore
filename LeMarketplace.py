@@ -258,13 +258,13 @@ with st.sidebar:
         if st.button("📊 Comparativo de Preços"): st.session_state.pg = "Calculadora"
         if st.button("📝 Novo Item na Base"): st.session_state.pg = "Cadastro"
         if st.button("📈 Análise de Vendas"): st.session_state.pg = "Análise de Vendas"
+        if st.button("📦 Gestão de Estoque"): st.session_state.pg = "Gestão de Estoque"
         if st.button("📉 Dashboard Financeiro"): st.session_state.pg = "Dashboard"
+
         st.write("")
         if st.button("🚪 Sair"):
             st.session_state.logado = False
             st.rerun()
-
-#planilha = conectar_google_sheets()
 
 # --- PÁGINA INÍCIO ---
 if st.session_state.pg == "Início":
@@ -370,40 +370,25 @@ if st.session_state.logado and client_bq:
         st.error(f"Erro ao acessar o BigQuery: {e}")
 
 # --- NAVEGAÇÃO ENTRE PÁGINAS ---
+# --- NAVEGAÇÃO ENTRE PÁGINAS ---
+
+# 1. PÁGINA CALCULADORA
 if st.session_state.pg == "Calculadora":
     st.header("📊 Comparativo de Preços")
     if not df_base_completa.empty:
         df_geral = df_base_completa.copy()
-        # Garante que o custo seja numérico
         df_geral['Custo_aquisicao_num'] = df_geral['Custo_aquisicao'].apply(converter_custo_seguro)
         
-        # 1. Definimos os nomes das colunas como col_sel1 e col_sel2
         col_sel1, col_sel2 = st.columns(2)
         
-        # AJUSTE: O conteúdo da calculadora precisa estar dentro do IF acima
         with col_sel1:
-            # Criamos uma lista garantindo que cada item seja uma string limpa
             opcoes_produtos = sorted([str(p) for p in df_geral['Produto'].unique()])
-            
-            prod_sel = st.selectbox(
-                "Pesquisar Produto", 
-                opcoes_produtos, 
-                index=None, 
-                placeholder="Digite o produto..."
-            )
+            prod_sel = st.selectbox("Pesquisar Produto", opcoes_produtos, index=None, placeholder="Digite o produto...")
             
         with col_sel2:
-            # Fazemos o mesmo para o SKU
             opcoes_skus = sorted([str(s) for s in df_geral['SKU'].unique()])
-            
-            v_sku_sel = st.selectbox(
-                "Pesquisar por SKU", 
-                opcoes_skus, 
-                index=None, 
-                placeholder="Busque o SKU..."
-            )
+            v_sku_sel = st.selectbox("Pesquisar por SKU", opcoes_skus, index=None, placeholder="Busque o SKU...")
 
-        # O final_item e os cálculos precisam estar alinhados com o "if not df_base_completa.empty"
         final_item = None
         if v_sku_sel: 
             final_item = df_geral[df_geral['SKU'] == v_sku_sel].iloc[0]
@@ -542,7 +527,6 @@ elif st.session_state.pg == "Cadastro":
             else:
                 st.error("Preencha o Nome e SKU Base.")
 
-# --- SEÇÃO DO DASHBOARD (BUSCA POR NOME -> AUTO SKU) ---
 # --- SEÇÃO DE CADASTRO ---
 elif st.session_state.pg == "Cadastro":
     st.header("📝 Novo Item na Base")
@@ -619,212 +603,315 @@ elif st.session_state.pg == "Cadastro":
             else:
                 st.error("Preencha o Nome e SKU Base.")
 
+
 # --- SEÇÃO DO DASHBOARD ---
 elif st.session_state.pg == "Dashboard":
-        st.header("📊 Dashboard Financeiro")
-        
-        if 'processando_venda' not in st.session_state:
-            st.session_state.processando_venda = False
+    st.header("📊 Dashboard Financeiro")
+    
+    if 'processando_venda' not in st.session_state:
+        st.session_state.processando_venda = False
 
-        # --- 1. REGISTRO DE NOVA VENDA (BIGQUERY) ---
-        with st.expander("➕ Registrar Nova Venda", expanded=True):
-            if not df_base_completa.empty:
-                df_dash = df_base_completa.copy()
-                df_dash['Custo_num'] = df_dash['Custo_aquisicao'].apply(converter_custo_seguro)
-                
-                col_p1, col_p2 = st.columns(2)
-                
-                with col_p1:
-                    # Aplicado sorted() para ordem alfabética no Nome
-                    v_prod_sel = st.selectbox(
-                        "Pesquisar por Nome", 
-                        sorted(df_dash['Produto'].unique()), 
-                        index=None, 
-                        placeholder="Busque o Produto..."
-                    )
-                
-                with col_p2:
-                    # Aplicado sorted() para ordem alfabética no SKU
-                    v_sku_sel = st.selectbox(
-                        "Pesquisar por SKU", 
-                        sorted(df_dash['SKU'].unique()), 
-                        index=None, 
-                        placeholder="Busque o SKU..."
-                    )
-                item_venda = None
-                if v_sku_sel: 
-                    item_venda = df_dash[df_dash['SKU'] == v_sku_sel].iloc[0]
-                elif v_prod_sel: 
-                    item_venda = df_dash[df_dash['Produto'] == v_prod_sel].iloc[0]
+    # --- 1. REGISTRO DE NOVA VENDA (BIGQUERY) ---
+    with st.expander("➕ Registrar Nova Venda", expanded=True):
+        if not df_base_completa.empty:
+            df_dash = df_base_completa.copy()
+            df_dash['Custo_num'] = df_dash['Custo_aquisicao'].apply(converter_custo_seguro)
+            
+            col_p1, col_p2 = st.columns(2)
+            
+            with col_p1:
+                v_prod_sel = st.selectbox("Pesquisar por Nome", sorted(df_dash['Produto'].unique()), index=None, placeholder="Busque o Produto...")
+            with col_p2:
+                v_sku_sel = st.selectbox("Pesquisar por SKU", sorted(df_dash['SKU'].unique()), index=None, placeholder="Busque o SKU...")
 
-                if item_venda is not None:
-                    v_nome_final = item_venda['Produto']
-                    v_sku_final = item_venda['SKU']
-                    v_custo_base = item_venda['Custo_num']
-                    st.success(f"✅ Item: **{v_nome_final}** | SKU: **{v_sku_final}** | Custo Base: **R$ {v_custo_base:.2f}**")
-                    
-                    c_v1, c_v2, c_v3 = st.columns(3)
-                    with c_v1:
-                        mkt_venda = st.selectbox("Canal de Venda", ["shein", "shopee", "temu"])
-                        v_qtd = st.number_input("Qtd Vendida", min_value=1, value=1)
-                    with c_v2:
-                        v_preco_venda = st.number_input("Preço de Venda Praticado (R$)", min_value=0.0, step=0.01, value=0.0)
-                        imp, c_fixo = 0.06, 1.00
-                        if mkt_venda == "shein": com, tax = 0.18, 5.0
-                        elif mkt_venda == "shopee": com, tax = 0.20, (4.0 if v_custo_base < 50 else 20.0)
-                        else: com, tax = 0.0, 0.0
-                        lucro_un_calc = v_preco_venda - (v_preco_venda * com) - (v_preco_venda * imp) - v_custo_base - c_fixo - tax
-                        v_margem_auto = (lucro_un_calc / v_preco_venda * 100) if v_preco_venda > 0 else 0.0
-                        st.write(f"Margem: **{v_margem_auto:.2f}%**")
-                    with c_v3:
-                        v_data = st.date_input("Data da Venda", value=datetime.now())
-                        lucro_total_dinamico = lucro_un_calc * v_qtd
-                        st.metric("Lucro Total", f"R$ {lucro_total_dinamico:.2f}")
+            item_venda = None
+            if v_sku_sel: item_venda = df_dash[df_dash['SKU'] == v_sku_sel].iloc[0]
+            elif v_prod_sel: item_venda = df_dash[df_dash['Produto'] == v_prod_sel].iloc[0]
+
+            if item_venda is not None:
+                v_nome_final, v_sku_final, v_custo_base = item_venda['Produto'], item_venda['SKU'], item_venda['Custo_num']
+                st.success(f"✅ Item: **{v_nome_final}** | SKU: **{v_sku_final}** | Custo Base: **R$ {v_custo_base:.2f}**")
+                
+                c_v1, c_v2, c_v3 = st.columns(3)
+                with c_v1:
+                    mkt_venda = st.selectbox("Canal de Venda", ["shein", "shopee", "temu"])
+                    v_qtd = st.number_input("Qtd Vendida", min_value=1, value=1)
+                with c_v2:
+                    v_preco_venda = st.number_input("Preço de Venda Praticado (R$)", min_value=0.0, step=0.01, value=0.0)
+                    imp, c_fixo = 0.06, 1.00
+                    if mkt_venda == "shein": com, tax = 0.18, 5.0
+                    elif mkt_venda == "shopee": com, tax = 0.20, (4.0 if v_custo_base < 50 else 20.0)
+                    else: com, tax = 0.0, 0.0
+                    lucro_un_calc = v_preco_venda - (v_preco_venda * com) - (v_preco_venda * imp) - v_custo_base - c_fixo - tax
+                    v_margem_auto = (lucro_un_calc / v_preco_venda * 100) if v_preco_venda > 0 else 0.0
+                    st.write(f"Margem: **{v_margem_auto:.2f}%**")
+                with c_v3:
+                    v_data = st.date_input("Data da Venda", value=datetime.now())
+                    lucro_total_dinamico = lucro_un_calc * v_qtd
+                    st.metric("Lucro Total", f"R$ {lucro_total_dinamico:.2f}")
 
                 if not st.session_state.processando_venda:
-                        if st.button("🚀 Confirmar e Registrar Venda", type="primary"):
-                            st.session_state.processando_venda = True
-                            try:
-                                # 1. Garanta que o ID da tabela está correto
-                                table_id = "leandro-marketplace.DL_Store_Online.tb_vendas_realizadas"
-                                
-                                # 2. Prepare os dados (Certifique-se que os nomes batem com o Schema do BQ)
-                                row = [{
-                                    "produto": str(v_nome_final), 
-                                    "sku": str(v_sku_final),
-                                    "preco_venda": float(v_preco_venda), 
-                                    "quantidade": int(v_qtd),
-                                    "data": v_data.strftime("%Y-%m-%d"),
-                                    "lucro_total": float(round(lucro_total_dinamico, 2))
-                                }]
-                                
-                                # 3. Tenta inserir
-                                errors = client_bq.insert_rows_json(table_id, row)
-                                
-                                if not errors:
-                                    st.success("Venda registrada com sucesso!")
-                                    st.cache_data.clear()
-                                    st.session_state.processando_venda = False
-                                    st.rerun()
-                                else:
-                                    # Se houver erro específico de coluna/tipo no BQ, ele mostra aqui
-                                    st.error(f"Erro nas colunas do BigQuery: {errors}")
-                                    st.session_state.processando_venda = False
-                                    
-                            except Exception as e:
-                                st.error(f"Erro de conexão: {e}")
-                                st.session_state.processando_venda = False
+                    if st.button("🚀 Confirmar e Registrar Venda", type="primary"):
+                        st.session_state.processando_venda = True
+                        try:
+                            table_id = "leandro-marketplace.DL_Store_Online.tb_vendas_realizadas"
+                            row = [{"produto": str(v_nome_final), "sku": str(v_sku_final), "preco_venda": float(v_preco_venda), "quantidade": int(v_qtd), "data": v_data.strftime("%Y-%m-%d"), "lucro_total": float(round(lucro_total_dinamico, 2))}]
+                            errors = client_bq.insert_rows_json(table_id, row)
+                            if not errors:
+                                st.success("Venda registrada!"); st.cache_data.clear(); st.session_state.processando_venda = False; st.rerun()
+                            else:
+                                st.error(f"Erro BQ: {errors}"); st.session_state.processando_venda = False
+                        except Exception as e:
+                            st.error(f"Erro: {e}"); st.session_state.processando_venda = False
 
+    # --- 2. SEÇÃO DE GRÁFICOS E HISTÓRICO ---
+    st.divider()
+    try:
+        query = "SELECT * FROM `leandro-marketplace.DL_Store_Online.tb_vendas_realizadas` ORDER BY data DESC"
+        df_vendas = client_bq.query(query).to_dataframe()
 
-        # --- 2. SEÇÃO DE GRÁFICOS E HISTÓRICO (FORA DO EXPANDER) ---
-        st.divider()
-        try:
-            query = "SELECT * FROM `leandro-marketplace.DL_Store_Online.tb_vendas_realizadas` ORDER BY data DESC"
-            df_vendas = client_bq.query(query).to_dataframe()
+        if not df_vendas.empty:
+            df_vendas.columns = ['Produto', 'SKU', 'Preço Venda', 'Quantidade', 'Data', 'Lucro Total']
+            df_vendas['Preço Venda'] = pd.to_numeric(df_vendas['Preço Venda'])
+            df_vendas['Lucro Total'] = pd.to_numeric(df_vendas['Lucro Total'])
+            df_vendas['Quantidade'] = pd.to_numeric(df_vendas['Quantidade'])
+            df_vendas['Faturamento'] = df_vendas['Preço Venda'] * df_vendas['Quantidade']
+            df_vendas['Data'] = pd.to_datetime(df_vendas['Data'])
+            
+            hoje = datetime.now()
+            inicio_mes_atual = hoje.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
 
-            if not df_vendas.empty:
-                df_vendas.columns = ['Produto', 'SKU', 'Preço Venda', 'Quantidade', 'Data', 'Lucro Total']
-                df_vendas['Preço Venda'] = pd.to_numeric(df_vendas['Preço Venda'])
-                df_vendas['Lucro Total'] = pd.to_numeric(df_vendas['Lucro Total'])
-                df_vendas['Quantidade'] = pd.to_numeric(df_vendas['Quantidade'])
-                df_vendas['Faturamento'] = df_vendas['Preço Venda'] * df_vendas['Quantidade']
-                df_vendas['Data'] = pd.to_datetime(df_vendas['Data'])
-                
-                df_diario = df_vendas.groupby('Data').agg({'Faturamento': 'sum', 'Lucro Total': 'sum'}).reset_index()
+            # --- SEPARAÇÃO LÓGICA ---
+            # 1. Meses Passados (Agrupados por Mês)
+            df_passado = df_vendas[df_vendas['Data'] < inicio_mes_atual].copy()
+            barras_meses_fechados = pd.DataFrame()
+            if not df_passado.empty:
+                # Tradução manual simples dos meses
+                meses_map = {1:'Jan', 2:'Fev', 3:'Mar', 4:'Abr', 5:'Mai', 6:'Jun', 7:'Jul', 8:'Ago', 9:'Set', 10:'Out', 11:'Nov', 12:'Dez'}
+                df_passado['Mes_Ano'] = df_passado['Data'].dt.month.map(meses_map) + "/" + df_passado['Data'].dt.year.astype(str).str[-2:]
+                barras_meses_fechados = df_passado.groupby('Mes_Ano').agg({'Faturamento':'sum', 'Lucro Total':'sum'}).reset_index()
+                barras_meses_fechados['Outros Custos'] = barras_meses_fechados['Faturamento'] - barras_meses_fechados['Lucro Total']
+                barras_meses_fechados.rename(columns={'Mes_Ano': 'Data_Label'}, inplace=True)
+
+            # 2. Mês Atual (Total Acumulado + Detalhe Diário)
+            df_atual_full = df_vendas[df_vendas['Data'] >= inicio_mes_atual].copy()
+            df_plot_atual = pd.DataFrame()
+            if not df_atual_full.empty:
+                # Barra Total do Mês Atual
+                total_atual = pd.DataFrame([{
+                    'Data_Label': 'Mês Atual', 
+                    'Faturamento': df_atual_full['Faturamento'].sum(),
+                    'Lucro Total': df_atual_full['Lucro Total'].sum(),
+                    'Outros Custos': df_atual_full['Faturamento'].sum() - df_atual_full['Lucro Total'].sum()
+                }])
+                # Detalhe Diário
+                df_diario = df_atual_full.groupby('Data').agg({'Faturamento':'sum', 'Lucro Total':'sum'}).reset_index()
                 df_diario['Outros Custos'] = df_diario['Faturamento'] - df_diario['Lucro Total']
-                df_diario = df_diario.sort_values(by='Data')
                 df_diario['Data_Label'] = df_diario['Data'].dt.strftime('%d/%m')
+                df_plot_atual = pd.concat([total_atual, df_diario], ignore_index=True)
 
-                # --- SEÇÃO DO GRÁFICO ---
-                st.subheader("📈 Faturamento vs Lucro Líquido (Por Dia)")
-                with st.container():
-                    st.markdown('<div class="plot-container">', unsafe_allow_html=True)
-                    fig = go.Figure()
-                    
-                    # Barra de Custos
-                    fig.add_trace(go.Bar(
-                        x=df_diario['Data_Label'], 
-                        y=df_diario['Outros Custos'], 
-                        name='Outros Custos', 
-                        marker_color='#FFF9E6', 
-                        hovertemplate='R$ %{y:,.2f}<extra></extra>'
-                    ))
-                    
-                    # Barra de Lucro (VALORES NO TOPO E FONTE AUMENTADA)
-                    fig.add_trace(go.Bar(
-                        x=df_diario['Data_Label'], 
-                        y=df_diario['Lucro Total'], 
-                        name='Lucro Líquido', 
-                        marker_color='#FFD700', 
-                        hovertemplate='R$ %{y:,.2f}<extra></extra>', 
-                        text=df_diario['Lucro Total'].apply(lambda x: f'R$ {x:,.2f}'), 
-                        textposition='outside',
-                        textfont=dict(size=14, color='black', family="Arial Black")
-                    ))
-                    
-                    fig.update_layout(
-                        barmode='stack', 
-                        paper_bgcolor='white', 
-                        plot_bgcolor='white', 
-                        yaxis=dict(
-                            showgrid=False, 
-                            zeroline=False, 
-                            showticklabels=False, 
-                            fixedrange=True,
-                            range=[0, df_diario['Faturamento'].max() * 1.3] # Espaço para o texto
-                        ), 
-                        xaxis=dict(
-                            title="Dias", 
-                            showgrid=False, 
-                            showline=True, 
-                            linecolor='black', 
-                            tickfont=dict(color='black', size=14),
-                            tickmode='linear'
-                        ), 
-                        legend=dict(
-                            orientation="h", 
-                            yanchor="bottom", 
-                            y=1.1, 
-                            xanchor="center", 
-                            x=0.5, 
-                            font=dict(color="black", size=14)
-                        ), 
-                        margin=dict(l=10, r=10, t=80, b=60), 
-                        hovermode='closest'
-                    )
-                    st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
-                    st.markdown('</div>', unsafe_allow_html=True)
+            # Unindo tudo para o gráfico
+            df_plot = pd.concat([barras_meses_fechados, df_plot_atual], ignore_index=True)
 
-                # Resumo de Métricas Gerais
-                c1, c2, c3 = st.columns(3)
-                c1.metric("Faturamento Total", f"R$ {df_vendas['Faturamento'].sum():.2f}")
-                margem_geral = (df_vendas['Lucro Total'].sum()/df_vendas['Faturamento'].sum()*100) if df_vendas['Faturamento'].sum() > 0 else 0
-                c2.metric("Lucro Líquido Total", f"R$ {df_vendas['Lucro Total'].sum():.2f}", delta=f"{margem_geral:.1f}% margem")
-                c3.metric("Itens Vendidos", int(df_vendas['Quantidade'].sum()))
-
-                # --- HISTÓRICO E GERENCIAMENTO ---
-                st.divider()
-                st.subheader("📋 Histórico e Gerenciamento")
-                st.markdown("""<div style="display: flex; font-weight: bold; background-color: #f8f9fa; padding: 10px 15px; border: 1px solid #e6e6e6; border-radius: 10px 10px 0 0;"><div style="flex: 3;">Produto</div><div style="flex: 2;">SKU</div><div style="flex: 1;">Qtd</div><div style="flex: 2;">Data</div><div style="flex: 2;">Lucro</div><div style="flex: 1;">Ação</div></div>""", unsafe_allow_html=True)
-                st.markdown('<div class="historico-scroll-container">', unsafe_allow_html=True)
+            # --- SEÇÃO DO GRÁFICO ---
+            st.subheader("📈 Desempenho Mensal e Diário")
+            with st.container():
+                st.markdown('<div class="plot-container">', unsafe_allow_html=True)
+                fig = go.Figure()
+                fig.add_trace(go.Bar(x=df_plot['Data_Label'], y=df_plot['Outros Custos'], name='Outros Custos', marker_color='#FFF9E6', hovertemplate='R$ %{y:,.2f}<extra></extra>'))
+                fig.add_trace(go.Bar(x=df_plot['Data_Label'], y=df_plot['Lucro Total'], name='Lucro Líquido', marker_color='#FFD700', hovertemplate='R$ %{y:,.2f}<extra></extra>', text=df_plot['Lucro Total'].apply(lambda x: f'R$ {x:,.2f}'), textposition='outside', textfont=dict(size=14, color='black', family="Arial Black")))
                 
-                for idx, row in df_vendas.iterrows():
-                    st.markdown('<div class="linha-historico">', unsafe_allow_html=True)
-                    cols = st.columns([3, 2, 1, 2, 2, 1])
-                    cols[0].write(row['Produto'])
-                    cols[1].write(f"`{row['SKU']}`")
-                    cols[2].write(str(int(row['Quantidade'])))
-                    cols[3].write(row['Data'].strftime('%d/%m/%Y'))
-                    cols[4].write(f"R$ {row['Lucro Total']:.2f}")
-                    if cols[5].button("❌", key=f"del_{idx}"):
-                        data_str = row['Data'].strftime('%Y-%m-%d')
-                        del_query = f"DELETE FROM `leandro-marketplace.DL_Store_Online.tb_vendas_realizadas` WHERE sku = '{row['SKU']}' AND data = '{data_str}' AND lucro_total = {row['Lucro Total']}"
-                        client_bq.query(del_query).result()
+                fig.update_layout(
+                    barmode='stack', paper_bgcolor='white', plot_bgcolor='white', 
+                    yaxis=dict(showgrid=False, zeroline=False, showticklabels=False, fixedrange=True, range=[0, df_plot['Faturamento'].max() * 1.5]), 
+                    xaxis=dict(title="Competência / Dias", showgrid=False, showline=True, linecolor='black', tickfont=dict(color='black', size=13)), 
+                    legend=dict(orientation="h", yanchor="bottom", y=1.1, xanchor="center", x=0.5, font=dict(color="black", size=14)), 
+                    margin=dict(l=10, r=10, t=80, b=60), hovermode='closest'
+                )
+                st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
+                st.markdown('</div>', unsafe_allow_html=True)
+
+            # Métricas Gerais
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Faturamento Total", f"R$ {df_vendas['Faturamento'].sum():.2f}")
+            c2.metric("Lucro Líquido", f"R$ {df_vendas['Lucro Total'].sum():.2f}")
+            c3.metric("Itens Vendidos", int(df_vendas['Quantidade'].sum()))
+
+            # --- HISTÓRICO ---
+            st.divider()
+            st.subheader("📋 Histórico de Vendas")
+            st.markdown("""<div style="display: flex; font-weight: bold; background-color: #f8f9fa; padding: 10px 15px; border: 1px solid #e6e6e6; border-radius: 10px 10px 0 0;"><div style="flex: 3;">Produto</div><div style="flex: 2;">SKU</div><div style="flex: 1;">Qtd</div><div style="flex: 2;">Data</div><div style="flex: 2;">Lucro</div><div style="flex: 1;">Ação</div></div>""", unsafe_allow_html=True)
+            st.markdown('<div class="historico-scroll-container">', unsafe_allow_html=True)
+            for idx, row in df_vendas.iterrows():
+                st.markdown('<div class="linha-historico">', unsafe_allow_html=True)
+                cols = st.columns([3, 2, 1, 2, 2, 1])
+                cols[0].write(row['Produto']); cols[1].write(f"`{row['SKU']}`"); cols[2].write(str(int(row['Quantidade']))); cols[3].write(row['Data'].strftime('%d/%m/%Y')); cols[4].write(f"R$ {row['Lucro Total']:.2f}")
+                if cols[5].button("❌", key=f"del_{idx}"):
+                    client_bq.query(f"DELETE FROM `leandro-marketplace.DL_Store_Online.tb_vendas_realizadas` WHERE sku = '{row['SKU']}' AND data = '{row['Data'].strftime('%Y-%m-%d')}' AND lucro_total = {row['Lucro Total']}").result()
+                    st.cache_data.clear(); st.rerun()
+                st.markdown('</div>', unsafe_allow_html=True)
+            st.markdown('</div>', unsafe_allow_html=True)
+        else:
+            st.info("Nenhuma venda registrada ainda.")
+    except Exception as e:
+        st.error(f"Erro no Dashboard: {e}")
+
+# --- SEÇÃO DE ESTOQUE ---
+elif st.session_state.pg == "Gestão de Estoque":
+    st.header("📦 Gestão de Estoque")
+    
+    # --- 1. ENTRADA DE PRODUTO ---
+    with st.expander("📥 Registrar Entrada de Mercadoria", expanded=True):
+        if not df_base_completa.empty:
+            df_est = df_base_completa.copy()
+            df_est['Custo_num'] = df_est['Custo_aquisicao'].apply(converter_custo_seguro)
+            
+            col_e1, col_e2 = st.columns(2)
+            with col_e1:
+                e_prod_sel = st.selectbox(
+                    "Produto para Entrada", 
+                    sorted(df_est['Produto'].unique()), 
+                    index=None, 
+                    placeholder="Escolha o Produto...",
+                    key="estoque_prod"
+                )
+            with col_e2:
+                e_sku_sel = st.selectbox(
+                    "SKU para Entrada", 
+                    sorted(df_est['SKU'].unique()), 
+                    index=None, 
+                    placeholder="Escolha o SKU...",
+                    key="estoque_sku"
+                )
+
+            item_estoque = None
+            if e_sku_sel: 
+                item_estoque = df_est[df_est['SKU'] == e_sku_sel].iloc[0]
+            elif e_prod_sel: 
+                item_estoque = df_est[df_est['Produto'] == e_prod_sel].iloc[0]
+
+            if item_estoque is not None:
+                st.info(f"📍 Selecionado: **{item_estoque['Produto']}** (SKU: {item_estoque['SKU']})")
+                
+                c_in1, c_in2, c_in3 = st.columns(3)
+                with c_in1:
+                    qtd_in = st.number_input("Quantidade Comprada", min_value=1, value=1)
+                with c_in2:
+                    valor_pago_un = st.number_input("Valor Pago Unitário (R$)", min_value=0.01, step=0.01, value=item_estoque['Custo_num'])
+                with c_in3:
+                    valor_total_compra = qtd_in * valor_pago_un
+                    st.metric("Total Investido", f"R$ {valor_total_compra:.2f}")
+
+                if st.button("📥 Salvar Entrada no BQ", type="primary", use_container_width=True):
+                    try:
+                        table_id_estoque = "leandro-marketplace.DL_Store_Online.tb_estoque"
+                        df_nova_entrada = pd.DataFrame([{
+                            "produto": str(item_estoque['Produto']),
+                            "sku": str(item_estoque['SKU']),
+                            "quantidade": int(qtd_in),
+                            "valor_pago": float(valor_pago_un),
+                            "data_entrada": datetime.now().date() 
+                        }])
+                        job_config = bigquery.LoadJobConfig(
+                            write_disposition="WRITE_APPEND",
+                            schema=[bigquery.SchemaField("data_entrada", "DATE")]
+                        )
+                        job = client_bq.load_table_from_dataframe(df_nova_entrada, table_id_estoque, job_config=job_config)
+                        job.result()
+                        st.success("Estoque atualizado!")
                         st.cache_data.clear()
                         st.rerun()
-                    st.markdown('</div>', unsafe_allow_html=True)
-                st.markdown('</div>', unsafe_allow_html=True)
-            else:
-                st.info("Nenhuma venda registrada ainda.")
-        except Exception as e:
-            st.error(f"Erro ao carregar Dashboard: {e}")
+                    except Exception as e: 
+                        st.error(f"Erro ao salvar: {e}")
+
+    # --- 2. TABELA CONSOLIDADA (DENTRO DO ELIF) ---
+    st.divider()
+    st.subheader("📋 Posição de Estoque e Potencial de Lucro")
+
+    try:
+        query_est = "SELECT * FROM `leandro-marketplace.DL_Store_Online.tb_estoque`"
+        df_raw = client_bq.query(query_est).to_dataframe()
+
+        if not df_raw.empty:
+            # Lógica de Recomendação de Canal e Lucro
+            def recomendar_canal(custo):
+                p_sugerido = custo * 1.35
+                imp, c_fixo = 0.06, 1.00
+                l_shein = p_sugerido - (p_sugerido * 0.18) - (p_sugerido * imp) - custo - c_fixo - 5.0
+                tax_shopee = 4.0 if custo < 50 else 20.0
+                l_shopee = p_sugerido - (p_sugerido * 0.20) - (p_sugerido * imp) - custo - c_fixo - tax_shopee
+                l_temu = p_sugerido - (p_sugerido * imp) - custo - c_fixo
+                lucros = {"Shein": l_shein, "Shopee": l_shopee, "Temu": l_temu}
+                melhor_canal = max(lucros, key=lucros.get)
+                return melhor_canal, lucros[melhor_canal]
+
+            total_investido_estoque = (df_raw['quantidade'] * df_raw['valor_pago']).sum()
+            lucro_potencial_total = sum(df_raw.apply(lambda r: recomendar_canal(r['valor_pago'])[1] * r['quantidade'], axis=1))
+            quantidade_total_itens = df_raw['quantidade'].sum()
+
+            # Banner de Métricas
+            m1, m2, m3 = st.columns(3)
+            with m1: st.metric("💰 Valor em Estoque (Custo)", f"R$ {total_investido_estoque:,.2f}")
+            with m2: st.metric("🚀 Lucro Potencial Total", f"R$ {lucro_potencial_total:,.2f}")
+            with m3: st.metric("📦 Total de Itens", f"{int(quantidade_total_itens)} un")
+            
+            st.write("") 
+
+            # Agrupamento para a Tabela
+            df_visual_est = df_raw.groupby(['sku', 'produto']).agg({
+                'quantidade': 'sum',
+                'valor_pago': 'mean' 
+            }).reset_index()
+
+            # Cabeçalho da Tabela (Ajustado para novas colunas)
+            st.markdown("""<div style="display: flex; font-weight: bold; background-color: #f8f9fa; padding: 10px 15px; border: 1px solid #e6e6e6; border-radius: 10px 10px 0 0;"><div style="flex: 2.5;">Produto</div><div style="flex: 1.5;">Melhor Canal</div><div style="flex: 1.5;">Lucro (Un/Total)</div><div style="flex: 0.8;">Qtd</div><div style="flex: 1.5;">Baixar</div><div style="flex: 0.5;">Ação</div></div>""", unsafe_allow_html=True)
+
+            for idx, r in df_visual_est.iterrows():
+                canal, lucro_un = recomendar_canal(r['valor_pago'])
+                lucro_lote = lucro_un * r['quantidade']
+                
+                cols = st.columns([2.5, 1.5, 1.5, 0.8, 1.5, 0.5])
+                
+                # Coluna 1: Produto e SKU
+                cols[0].markdown(f"{r['produto']}<br><small><code>{r['sku']}</code></small>", unsafe_allow_html=True)
+                
+                # Coluna 2: Melhor Canal (Destaque)
+                cor_canal = "#FFD700" if canal == "Shopee" else "#000000"
+                cols[1].markdown(f"<span style='color:{cor_canal}; font-weight:bold;'>{canal}</span>", unsafe_allow_html=True)
+                
+                # Coluna 3: Lucro Unidade x Quantidade
+                cols[2].markdown(f"**R$ {lucro_lote:.2f}**", unsafe_allow_html=True)
+                
+                # Coluna 4: Quantidade Atual
+                cols[3].write(str(int(r['quantidade'])))
+                
+                # Coluna 5: Input de Baixa
+                qtd_baixa = cols[4].number_input("Tirar", min_value=1, max_value=int(r['quantidade']), value=1, key=f"baixa_{idx}", label_visibility="collapsed")
+                
+                # Coluna 6: Botão de Ação
+                if cols[5].button("✔️", key=f"btn_{idx}"):
+                    try:
+                        del_query = f"DELETE FROM `leandro-marketplace.DL_Store_Online.tb_estoque` WHERE sku = '{r['sku']}'"
+                        client_bq.query(del_query).result()
+                        novo_saldo = int(r['quantidade']) - qtd_baixa
+                        
+                        if novo_saldo > 0:
+                            df_update = pd.DataFrame([{
+                                "produto": r['produto'],
+                                "sku": r['sku'],
+                                "quantidade": novo_saldo,
+                                "valor_pago": float(r['valor_pago']),
+                                "data_entrada": datetime.now().date()
+                            }])
+                            client_bq.load_table_from_dataframe(df_update, "leandro-marketplace.DL_Store_Online.tb_estoque").result()
+
+                        st.success(f"Baixa OK! Novo saldo: {novo_saldo}")
+                        st.cache_data.clear()
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Erro: {e}")
+                st.divider()
+        else:
+            st.info("Estoque vazio.")
+    except Exception as e:
+        st.error(f"Erro ao processar estoque: {e}")
