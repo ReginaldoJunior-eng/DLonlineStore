@@ -13,6 +13,7 @@ from google.oauth2 import service_account
 import plotly.graph_objects as go # Importando Plotly
 if 'processando_venda' not in st.session_state:
     st.session_state.processando_venda = False
+from datetime import datetime, timedelta
 
 
 # --- CONFIGURAÇÕES DE PÁGINA ---
@@ -606,6 +607,7 @@ elif st.session_state.pg == "Cadastro":
 
 # --- SEÇÃO DO DASHBOARD ---
 elif st.session_state.pg == "Dashboard":
+    from datetime import timedelta
     st.header("📊 Dashboard Financeiro")
     
     if 'processando_venda' not in st.session_state:
@@ -646,7 +648,7 @@ elif st.session_state.pg == "Dashboard":
                     v_margem_auto = (lucro_un_calc / v_preco_venda * 100) if v_preco_venda > 0 else 0.0
                     st.write(f"Margem: **{v_margem_auto:.2f}%**")
                 with c_v3:
-                    v_data = st.date_input("Data da Venda", value=datetime.now())
+                    v_data = st.date_input("Data da Venda", value=(datetime.utcnow() - timedelta(hours=3)))
                     lucro_total_dinamico = lucro_un_calc * v_qtd
                     st.metric("Lucro Total", f"R$ {lucro_total_dinamico:.2f}")
 
@@ -655,7 +657,15 @@ elif st.session_state.pg == "Dashboard":
                         st.session_state.processando_venda = True
                         try:
                             table_id = "leandro-marketplace.DL_Store_Online.tb_vendas_realizadas"
-                            row = [{"produto": str(v_nome_final), "sku": str(v_sku_final), "preco_venda": float(v_preco_venda), "quantidade": int(v_qtd), "data": v_data.strftime("%Y-%m-%d"), "lucro_total": float(round(lucro_total_dinamico, 2))}]
+                            v_data_formatada = v_data.strftime("%Y-%m-%d") 
+                            row = [{
+                                "produto": str(v_nome_final), 
+                                "sku": str(v_sku_final), 
+                                "preco_venda": float(v_preco_venda), 
+                                "quantidade": int(v_qtd), 
+                                "data": v_data_formatada, # Aqui usa o nome da coluna no BQ
+                                "lucro_total": float(round(lucro_total_dinamico, 2))
+                            }]
                             errors = client_bq.insert_rows_json(table_id, row)
                             if not errors:
                                 st.success("Venda registrada!"); st.cache_data.clear(); st.session_state.processando_venda = False; st.rerun()
@@ -678,7 +688,8 @@ elif st.session_state.pg == "Dashboard":
             df_vendas['Faturamento'] = df_vendas['Preço Venda'] * df_vendas['Quantidade']
             df_vendas['Data'] = pd.to_datetime(df_vendas['Data'])
             
-            hoje = datetime.now()
+# Correção para garantir que o "hoje" seja sempre o horário de Brasília
+            hoje = datetime.utcnow() - timedelta(hours=3)
             inicio_mes_atual = hoje.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
 
             # --- SEPARAÇÃO LÓGICA ---
