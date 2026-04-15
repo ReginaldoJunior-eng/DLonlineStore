@@ -756,10 +756,13 @@ elif st.session_state.pg == "Dashboard":
     except Exception as e:
         st.error(f"Erro no Dashboard: {e}")
 
-
 # --- SEÇÃO DE ESTOQUE ---
 elif st.session_state.pg == "Gestão de Estoque":
     st.header("📦 Gestão de Estoque")
+    
+    # IDs das Tabelas para referência
+    table_id_viva = "leandro-marketplace.DL_Store_Online.tb_estoque"
+    table_id_hist = "leandro-marketplace.DL_Store_Online.tb_estoque_historico"
     
     # --- 1. ENTRADA DE PRODUTO ---
     with st.expander("📥 Registrar Entrada de Mercadoria", expanded=True):
@@ -809,7 +812,7 @@ elif st.session_state.pg == "Gestão de Estoque":
                         # Forçando Horário de Brasília (UTC-3)
                         data_brasilia = (datetime.utcnow() - timedelta(hours=3)).date()
                         
-                        table_id_estoque = "leandro-marketplace.DL_Store_Online.tb_estoque"
+                        # A) SALVAR NA TABELA VIVA (Para manter o saldo atual e visual)
                         df_nova_entrada = pd.DataFrame([{
                             "produto": str(item_estoque['Produto']),
                             "sku": str(item_estoque['SKU']),
@@ -821,19 +824,30 @@ elif st.session_state.pg == "Gestão de Estoque":
                             write_disposition="WRITE_APPEND",
                             schema=[bigquery.SchemaField("data_entrada", "DATE")]
                         )
-                        job = client_bq.load_table_from_dataframe(df_nova_entrada, table_id_estoque, job_config=job_config)
-                        job.result()
-                        st.success("Estoque atualizado!")
+                        client_bq.load_table_from_dataframe(df_nova_entrada, table_id_viva, job_config=job_config).result()
+
+                        # B) REGISTRAR NO HISTÓRICO (Novo registro de movimentação)
+                        df_hist_entrada = pd.DataFrame([{
+                            "produto": str(item_estoque['Produto']),
+                            "sku": str(item_estoque['SKU']),
+                            "quantidade": int(qtd_in),
+                            "valor_pago": float(valor_pago_un),
+                            "data_movimentacao": data_brasilia,
+                            "tipo_movimentacao": "ENTRADA"
+                        }])
+                        client_bq.load_table_from_dataframe(df_hist_entrada, table_id_hist).result()
+
+                        st.success("Estoque e Histórico atualizados!")
                         st.cache_data.clear()
                         st.rerun()
                     except Exception as e: 
                         st.error(f"Erro ao salvar: {e}")
 
-    # --- 2. TABELA CONSOLIDADA E GRÁFICO (DEVOLVENDO AS DATAS) ---
+    # --- 2. TABELA CONSOLIDADA E GRÁFICO ---
     st.divider()
     
     try:
-        query_est = "SELECT * FROM `leandro-marketplace.DL_Store_Online.tb_estoque`"
+        query_est = f"SELECT * FROM `{table_id_viva}`"
         df_raw = client_bq.query(query_est).to_dataframe()
 
         if not df_raw.empty:
@@ -859,7 +873,6 @@ elif st.session_state.pg == "Gestão de Estoque":
 
             st.subheader("📈 Evolução do Estoque")
             
-            # Preparação dos dados
             df_raw['data_entrada'] = pd.to_datetime(df_raw['data_entrada']).dt.date
             df_grafico = df_raw.groupby('data_entrada')['quantidade'].sum().reset_index()
             df_grafico = df_grafico.sort_values('data_entrada')
@@ -882,14 +895,14 @@ elif st.session_state.pg == "Gestão de Estoque":
                     paper_bgcolor='white', plot_bgcolor='white',
                     yaxis=dict(showgrid=True, gridcolor='#f0f0f0', title="Quantidade", side="left"),
                     xaxis=dict(
-                        type='category', # <--- ISSO DEVOLVE A DATA (Força mostrar cada label)
+                        type='category',
                         showgrid=False, 
                         showline=True, 
                         linecolor='black', 
                         automargin=True, 
                         tickfont=dict(size=12, color='black')
                     ),
-                    margin=dict(l=10, r=10, t=50, b=80), # Margem b=80 para garantir o espaço
+                    margin=dict(l=10, r=10, t=50, b=80),
                     hovermode='closest'
                 )
                 st.plotly_chart(fig_est, use_container_width=True, config={'displayModeBar': False})
@@ -919,17 +932,32 @@ elif st.session_state.pg == "Gestão de Estoque":
                 if cols[5].button("✔️", key=f"btn_{idx}"):
                     try:
                         from datetime import timedelta
-                        del_query = f"DELETE FROM `leandro-marketplace.DL_Store_Online.tb_estoque` WHERE sku = '{r['sku']}'"
+                        data_br_baixa = (datetime.utcnow() - timedelta(hours=3)).date()
+
+                        # A) ATUALIZAR TABELA VIVA (Ajuste de Saldo)
+                        del_query = f"DELETE FROM `{table_id_viva}` WHERE sku = '{r['sku']}'"
                         client_bq.query(del_query).result()
                         novo_saldo = int(r['quantidade']) - qtd_baixa
+                        
                         if novo_saldo > 0:
-                            data_br_baixa = (datetime.utcnow() - timedelta(hours=3)).date()
                             df_update = pd.DataFrame([{
                                 "produto": r['produto'], "sku": r['sku'], "quantidade": novo_saldo,
                                 "valor_pago": float(r['valor_pago']), "data_entrada": data_br_baixa
                             }])
-                            client_bq.load_table_from_dataframe(df_update, "leandro-marketplace.DL_Store_Online.tb_estoque").result()
-                        st.success(f"Baixa OK!")
+                            client_bq.load_table_from_dataframe(df_update, table_id_viva).result()
+
+                        # B) REGISTRAR NO HISTÓRICO (Evento de Baixa)
+                        df_hist_saida = pd.DataFrame([{
+                            "produto": r['produto'],
+                            "sku": r['sku'],
+                            "quantidade": int(qtd_baixa) * -1, # Quantidade negativa para indicar saída
+                            "valor_pago": float(r['valor_pago']),
+                            "data_movimentacao": data_br_baixa,
+                            "tipo_movimentacao": "BAIXA"
+                        }])
+                        client_bq.load_table_from_dataframe(df_hist_saida, table_id_hist).result()
+
+                        st.success(f"Baixa registrada no histórico!")
                         st.cache_data.clear()
                         st.rerun()
                     except Exception as e:
