@@ -756,6 +756,7 @@ elif st.session_state.pg == "Dashboard":
     except Exception as e:
         st.error(f"Erro no Dashboard: {e}")
 
+
 # --- SEÇÃO DE ESTOQUE ---
 elif st.session_state.pg == "Gestão de Estoque":
     st.header("📦 Gestão de Estoque")
@@ -804,13 +805,17 @@ elif st.session_state.pg == "Gestão de Estoque":
 
                 if st.button("📥 Salvar Entrada no BQ", type="primary", use_container_width=True):
                     try:
+                        from datetime import timedelta
+                        # Forçando Horário de Brasília (UTC-3)
+                        data_brasilia = (datetime.utcnow() - timedelta(hours=3)).date()
+                        
                         table_id_estoque = "leandro-marketplace.DL_Store_Online.tb_estoque"
                         df_nova_entrada = pd.DataFrame([{
                             "produto": str(item_estoque['Produto']),
                             "sku": str(item_estoque['SKU']),
                             "quantidade": int(qtd_in),
                             "valor_pago": float(valor_pago_un),
-                            "data_entrada": datetime.now().date() 
+                            "data_entrada": data_brasilia 
                         }])
                         job_config = bigquery.LoadJobConfig(
                             write_disposition="WRITE_APPEND",
@@ -824,16 +829,14 @@ elif st.session_state.pg == "Gestão de Estoque":
                     except Exception as e: 
                         st.error(f"Erro ao salvar: {e}")
 
-    # --- 2. TABELA CONSOLIDADA (DENTRO DO ELIF) ---
+    # --- 2. TABELA CONSOLIDADA E GRÁFICO (DEVOLVENDO AS DATAS) ---
     st.divider()
-    st.subheader("📋 Posição de Estoque e Potencial de Lucro")
-
+    
     try:
         query_est = "SELECT * FROM `leandro-marketplace.DL_Store_Online.tb_estoque`"
         df_raw = client_bq.query(query_est).to_dataframe()
 
         if not df_raw.empty:
-            # Lógica de Recomendação de Canal e Lucro
             def recomendar_canal(custo):
                 p_sugerido = custo * 1.35
                 imp, c_fixo = 0.06, 1.00
@@ -849,63 +852,84 @@ elif st.session_state.pg == "Gestão de Estoque":
             lucro_potencial_total = sum(df_raw.apply(lambda r: recomendar_canal(r['valor_pago'])[1] * r['quantidade'], axis=1))
             quantidade_total_itens = df_raw['quantidade'].sum()
 
-            # Banner de Métricas
             m1, m2, m3 = st.columns(3)
-            with m1: st.metric("💰 Valor em Estoque (Custo)", f"R$ {total_investido_estoque:,.2f}")
-            with m2: st.metric("🚀 Lucro Potencial Total", f"R$ {lucro_potencial_total:,.2f}")
+            with m1: st.metric("💰 Valor em Estoque", f"R$ {total_investido_estoque:,.2f}")
+            with m2: st.metric("🚀 Lucro Potencial", f"R$ {lucro_potencial_total:,.2f}")
             with m3: st.metric("📦 Total de Itens", f"{int(quantidade_total_itens)} un")
+
+            st.subheader("📈 Evolução do Estoque")
+            
+            # Preparação dos dados
+            df_raw['data_entrada'] = pd.to_datetime(df_raw['data_entrada']).dt.date
+            df_grafico = df_raw.groupby('data_entrada')['quantidade'].sum().reset_index()
+            df_grafico = df_grafico.sort_values('data_entrada')
+            df_grafico['label_data'] = pd.to_datetime(df_grafico['data_entrada']).dt.strftime('%d/%m')
+
+            with st.container():
+                st.markdown('<div class="plot-container">', unsafe_allow_html=True)
+                fig_est = go.Figure()
+                fig_est.add_trace(go.Bar(
+                    x=df_grafico['label_data'],
+                    y=df_grafico['quantidade'],
+                    marker_color='#FFD700',
+                    hovertemplate='Data: %{x}<br>Total: %{y} un<extra></extra>',
+                    text=df_grafico['quantidade'].astype(int),
+                    textposition='outside',
+                    textfont=dict(size=14, color='black', family="Arial Black")
+                ))
+
+                fig_est.update_layout(
+                    paper_bgcolor='white', plot_bgcolor='white',
+                    yaxis=dict(showgrid=True, gridcolor='#f0f0f0', title="Quantidade", side="left"),
+                    xaxis=dict(
+                        type='category', # <--- ISSO DEVOLVE A DATA (Força mostrar cada label)
+                        showgrid=False, 
+                        showline=True, 
+                        linecolor='black', 
+                        automargin=True, 
+                        tickfont=dict(size=12, color='black')
+                    ),
+                    margin=dict(l=10, r=10, t=50, b=80), # Margem b=80 para garantir o espaço
+                    hovermode='closest'
+                )
+                st.plotly_chart(fig_est, use_container_width=True, config={'displayModeBar': False})
+                st.markdown('</div>', unsafe_allow_html=True)
             
             st.write("") 
 
-            # Agrupamento para a Tabela
+            # --- TABELA DE DETALHAMENTO ---
             df_visual_est = df_raw.groupby(['sku', 'produto']).agg({
-                'quantidade': 'sum',
-                'valor_pago': 'mean' 
+                'quantidade': 'sum', 'valor_pago': 'mean' 
             }).reset_index()
 
-            # Cabeçalho da Tabela (Ajustado para novas colunas)
-            st.markdown("""<div style="display: flex; font-weight: bold; background-color: #f8f9fa; padding: 10px 15px; border: 1px solid #e6e6e6; border-radius: 10px 10px 0 0;"><div style="flex: 2.5;">Produto</div><div style="flex: 1.5;">Melhor Canal</div><div style="flex: 1.5;">Lucro (Un/Total)</div><div style="flex: 0.8;">Qtd</div><div style="flex: 1.5;">Baixar</div><div style="flex: 0.5;">Ação</div></div>""", unsafe_allow_html=True)
+            st.subheader("📋 Detalhamento por SKU")
+            st.markdown("""<div style="display: flex; font-weight: bold; background-color: #f8f9fa; padding: 10px 15px; border: 1px solid #e6e6e6; border-radius: 10px 10px 0 0;"><div style="flex: 2.5;">Produto</div><div style="flex: 1.5;">Melhor Canal</div><div style="flex: 1.5;">Lucro (Total)</div><div style="flex: 0.8;">Qtd</div><div style="flex: 1.5;">Baixar</div><div style="flex: 0.5;">Ação</div></div>""", unsafe_allow_html=True)
 
             for idx, r in df_visual_est.iterrows():
                 canal, lucro_un = recomendar_canal(r['valor_pago'])
                 lucro_lote = lucro_un * r['quantidade']
-                
                 cols = st.columns([2.5, 1.5, 1.5, 0.8, 1.5, 0.5])
-                
-                # Coluna 1: Produto e SKU
                 cols[0].markdown(f"{r['produto']}<br><small><code>{r['sku']}</code></small>", unsafe_allow_html=True)
-                
-                # Coluna 2: Melhor Canal (Destaque)
                 cor_canal = "#FFD700" if canal == "Shopee" else "#000000"
                 cols[1].markdown(f"<span style='color:{cor_canal}; font-weight:bold;'>{canal}</span>", unsafe_allow_html=True)
-                
-                # Coluna 3: Lucro Unidade x Quantidade
                 cols[2].markdown(f"**R$ {lucro_lote:.2f}**", unsafe_allow_html=True)
-                
-                # Coluna 4: Quantidade Atual
                 cols[3].write(str(int(r['quantidade'])))
-                
-                # Coluna 5: Input de Baixa
                 qtd_baixa = cols[4].number_input("Tirar", min_value=1, max_value=int(r['quantidade']), value=1, key=f"baixa_{idx}", label_visibility="collapsed")
                 
-                # Coluna 6: Botão de Ação
                 if cols[5].button("✔️", key=f"btn_{idx}"):
                     try:
+                        from datetime import timedelta
                         del_query = f"DELETE FROM `leandro-marketplace.DL_Store_Online.tb_estoque` WHERE sku = '{r['sku']}'"
                         client_bq.query(del_query).result()
                         novo_saldo = int(r['quantidade']) - qtd_baixa
-                        
                         if novo_saldo > 0:
+                            data_br_baixa = (datetime.utcnow() - timedelta(hours=3)).date()
                             df_update = pd.DataFrame([{
-                                "produto": r['produto'],
-                                "sku": r['sku'],
-                                "quantidade": novo_saldo,
-                                "valor_pago": float(r['valor_pago']),
-                                "data_entrada": datetime.now().date()
+                                "produto": r['produto'], "sku": r['sku'], "quantidade": novo_saldo,
+                                "valor_pago": float(r['valor_pago']), "data_entrada": data_br_baixa
                             }])
                             client_bq.load_table_from_dataframe(df_update, "leandro-marketplace.DL_Store_Online.tb_estoque").result()
-
-                        st.success(f"Baixa OK! Novo saldo: {novo_saldo}")
+                        st.success(f"Baixa OK!")
                         st.cache_data.clear()
                         st.rerun()
                     except Exception as e:
