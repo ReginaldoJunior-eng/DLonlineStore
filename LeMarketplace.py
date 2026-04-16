@@ -258,6 +258,7 @@ with st.sidebar:
         st.subheader(f"👋 Olá, Leandro")
         if st.button("📊 Comparativo de Preços"): st.session_state.pg = "Calculadora"
         if st.button("📝 Novo Item na Base"): st.session_state.pg = "Cadastro"
+        if st.button("💰 Alterar Preços"):    st.session_state.pg = "Alterar Preco"
         if st.button("📈 Análise de Vendas"): st.session_state.pg = "Análise de Vendas"
         if st.button("📦 Gestão de Estoque"): st.session_state.pg = "Gestão de Estoque"
         if st.button("📉 Dashboard Financeiro"): st.session_state.pg = "Dashboard"
@@ -370,7 +371,6 @@ if st.session_state.logado and client_bq:
     except Exception as e:
         st.error(f"Erro ao acessar o BigQuery: {e}")
 
-# --- NAVEGAÇÃO ENTRE PÁGINAS ---
 # --- NAVEGAÇÃO ENTRE PÁGINAS ---
 
 # 1. PÁGINA CALCULADORA
@@ -527,6 +527,106 @@ elif st.session_state.pg == "Cadastro":
                     st.error(f"Erro de conexão: {e}")
             else:
                 st.error("Preencha o Nome e SKU Base.")
+
+elif st.session_state.pg == "Alterar Preco":
+    st.header("📦 Atualização de Preços em Lote")
+
+    # Inicializa a lista de alterações na sessão se não existir
+    if 'lista_updates' not in st.session_state:
+        st.session_state.lista_updates = []
+
+    # 1. Busca os produtos para o Selectbox
+    @st.cache_data(ttl=600)
+    def listar_skus_disponiveis():
+        query = "SELECT DISTINCT sku, produto, custo_aquisicao FROM `leandro-marketplace.DL_Store_Online.tb_produtos` ORDER BY produto"
+        return client_bq.query(query).to_dataframe()
+
+    df_produtos = listar_skus_disponiveis()
+
+    # --- ÁREA DE ADIÇÃO ---
+    with st.expander("➕ Adicionar Item para Alteração", expanded=True):
+        opcoes = df_produtos.apply(lambda x: f"{x['sku']} - {x['produto']}", axis=1).tolist()
+        
+        # Campo agora permite digitar livremente e começa vazio
+        selecao_item = st.selectbox(
+            "Busque o SKU ou Nome do Produto", 
+            options=opcoes, 
+            index=None, 
+            placeholder="Digite para buscar...",
+            key="sel_bulk"
+        )
+        
+        if selecao_item:
+            sku_ref = selecao_item.split(" - ")[0]
+            dados_ref = df_produtos[df_produtos['sku'] == sku_ref].iloc[0]
+            
+            c1, c2 = st.columns(2)
+            with c1:
+                st.metric("Custo Atual", f"R$ {float(dados_ref['custo_aquisicao']):.2f}")
+            with c2:
+                novo_custo_bulk = st.number_input(
+                    "Novo Valor (R$)", 
+                    min_value=0.01, 
+                    step=0.01, 
+                    value=float(dados_ref['custo_aquisicao']),
+                    key="num_bulk"
+                )
+
+            if st.button("Adicionar à Fila", type="secondary"):
+                # Adiciona à lista temporária na session_state
+                st.session_state.lista_updates.append({
+                    "sku": sku_ref,
+                    "produto": dados_ref['produto'],
+                    "novo_valor": novo_custo_bulk
+                })
+                st.rerun()
+        else:
+            st.info("Pesquise um produto acima para ajustar o valor.")
+
+    # --- FILA DE PROCESSAMENTO ---
+    if st.session_state.lista_updates:
+        st.subheader("📋 Itens na Fila")
+        
+        # Exibe o que será alterado
+        for i, item in enumerate(st.session_state.lista_updates):
+            col_info, col_del = st.columns([4, 1])
+            col_info.info(f"**SKU:** {item['sku']} | **Novo Valor:** R$ {item['novo_valor']:.2f}")
+            if col_del.button("🗑️", key=f"del_{i}"):
+                st.session_state.lista_updates.pop(i)
+                st.rerun()
+
+        st.divider()
+        
+        col_btn1, col_btn2 = st.columns(2)
+        
+        with col_btn1:
+            if st.button("🚀 Enviar Pacote ao BigQuery", type="primary"):
+                try:
+                    # Criamos um script único com múltiplos UPDATES
+                    queries = []
+                    for item in st.session_state.lista_updates:
+                        q = f"UPDATE `leandro-marketplace.DL_Store_Online.tb_produtos` SET custo_aquisicao = {float(item['novo_valor'])} WHERE sku = '{item['sku']}';"
+                        queries.append(q)
+                    
+                    full_query = "\n".join(queries)
+                    
+                    # Executa o pacote de uma vez
+                    job = client_bq.query(full_query)
+                    job.result()
+
+                    st.success(f"✅ Sucesso! {len(st.session_state.lista_updates)} itens atualizados.")
+                    st.session_state.lista_updates = [] # Limpa a fila
+                    st.cache_data.clear()
+                    st.balloons()
+                except Exception as e:
+                    st.error(f"Erro no processamento em lote: {e}")
+        
+        with col_btn2:
+            if st.button("❌ Limpar Fila"):
+                st.session_state.lista_updates = []
+                st.rerun()
+    else:
+        st.write("") # Espaçador visual
 
 # --- SEÇÃO DE CADASTRO ---
 elif st.session_state.pg == "Cadastro":
