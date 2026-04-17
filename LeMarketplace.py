@@ -447,86 +447,98 @@ elif st.session_state.pg == "Análise de Vendas":
 
 elif st.session_state.pg == "Cadastro":
     st.header("📝 Novo Item na Base")
+    
     if 'cont_var' not in st.session_state:
         st.session_state.cont_var = 0
 
     col_btn1, col_btn2, _ = st.columns([0.8, 0.8, 4])
+    
     with col_btn1:
         if st.button("➕ Variante", type="secondary"):
             st.session_state.cont_var += 1
             st.rerun()
+            
     with col_btn2:
         if st.button("🗑️ Limpar", type="secondary"):
             st.session_state.cont_var = 0
             st.rerun()
 
-    with st.form("cad_final", clear_on_submit=True):
-        m = st.selectbox("Marketplace", ["shein", "shopee", "temu", "todos"])
-        n = st.text_input("Nome Base do Produto")
-        s_base = st.text_input("SKU Base")
-        # No BigQuery guardamos como número (float), então não precisa de .replace(',', '.')
-        c = st.number_input("Custo Unitário (R$)", min_value=0.01, step=0.01)
-        
-        lista_variantes = []
-        if st.session_state.cont_var > 0:
-            st.divider()
-            for i in range(st.session_state.cont_var):
-                c1, c2 = st.columns(2)
-                with c1:
-                    v_sku = st.text_input(f"SKU da Variante {i+1}", key=f"vsku_{i}")
-                with c2:
-                    v_char = st.text_input(f"Cor/Tipo {i+1}", key=f"vchar_{i}")
-                
-                if v_sku and v_char:
-                    lista_variantes.append({
-                        "nome_completo": f"{n} {v_char}", 
-                        "sku_variante": v_sku
-                    })
-
+    # --- CAMPOS PRINCIPAIS ---
+    m = st.selectbox("Marketplace", ["shein", "shopee", "temu", "todos"])
+    n = st.text_input("Nome Base do Produto")
+    s_base = st.text_input("SKU Base")
+    
+    # Este é o custo que as variantes vão "copiar"
+    c_padrao = st.number_input("Custo Unitário (R$)", min_value=0.01, step=0.01, value=0.01)
+    
+    lista_variantes = []
+    
+    # --- VARIANTES ---
+    if st.session_state.cont_var > 0:
         st.divider()
-        # Alterei o texto do botão para "Salvar no Banco de Dados"
-        if st.form_submit_button("🚀 Salvar Tudo no BigQuery", type="primary"):
-            if n and s_base:
-                try:
-                    # ID da sua tabela de produtos no BigQuery
-                    table_id_produtos = "leandro-marketplace.DL_Store_Online.tb_produtos"
-                    
-                    # Preparando a lista de marketplaces
-                    mkt_list = ["shein", "shopee", "temu"] if m == "todos" else [m]
-                    
-                    lote_bq = []
-                    for aba in mkt_list:
-                        # Adiciona o produto base para cada marketplace
+        for i in range(st.session_state.cont_var):
+            c1, c2, c3 = st.columns([2, 2, 1])
+            
+            with c1:
+                v_sku = st.text_input(f"SKU da Variante {i+1}", key=f"vsku_{i}")
+            with c2:
+                v_char = st.text_input(f"Cor/Modelo {i+1}", key=f"vchar_{i}")
+            with c3:
+                # O SEGREDO: A key muda se o c_padrao mudar. 
+                # Isso força o Streamlit a atualizar o valor visual na tela.
+                v_custo = st.number_input(
+                    f"Custo {i+1}", 
+                    min_value=0.01, 
+                    step=0.01, 
+                    value=c_padrao, 
+                    key=f"vcost_{i}_{c_padrao}" 
+                )
+            
+            if v_sku and v_char:
+                lista_variantes.append({
+                    "nome_completo": f"{n} {v_char}", 
+                    "sku_variante": v_sku,
+                    "custo_variante": v_custo
+                })
+
+    st.divider()
+
+    # --- SALVAR ---
+    if st.button("🚀 Salvar Tudo no BigQuery", type="primary"):
+        if n and s_base:
+            try:
+                table_id_produtos = "leandro-marketplace.DL_Store_Online.tb_produtos"
+                mkt_list = ["shein", "shopee", "temu"] if m == "todos" else [m]
+                
+                lote_bq = []
+                for aba in mkt_list:
+                    # Item Base
+                    lote_bq.append({
+                        "marketplace": aba, "sku": str(s_base),
+                        "produto": str(n), "custo_aquisicao": float(c_padrao)
+                    })
+                    # Variantes
+                    for var in lista_variantes:
                         lote_bq.append({
                             "marketplace": aba,
-                            "sku": str(s_base),
-                            "produto": str(n),
-                            "custo_aquisicao": float(c)
+                            "sku": str(var['sku_variante']),
+                            "produto": str(var['nome_completo']),
+                            "custo_aquisicao": float(var['custo_variante'])
                         })
-                        # Adiciona as variantes para cada marketplace
-                        for var in lista_variantes:
-                            lote_bq.append({
-                                "marketplace": aba,
-                                "sku": str(var['sku_variante']),
-                                "produto": str(var['nome_completo']),
-                                "custo_aquisicao": float(c)
-                            })
-                    
-                    # Envia para o BigQuery
-                    errors = client_bq.insert_rows_json(table_id_produtos, lote_bq)
-                    
-                    if not errors:
-                        st.success(f"✅ Sucesso! {len(lote_bq)} itens salvos no BigQuery.")
-                        st.session_state.cont_var = 0 
-                        st.cache_data.clear()
-                        # st.rerun() # Opcional: descomente se quiser que a página limpe na hora
-                    else:
-                        st.error(f"Erro nas colunas do BigQuery: {errors}")
                 
-                except Exception as e:
-                    st.error(f"Erro de conexão: {e}")
-            else:
-                st.error("Preencha o Nome e SKU Base.")
+                errors = client_bq.insert_rows_json(table_id_produtos, lote_bq)
+                
+                if not errors:
+                    st.success(f"✅ Sucesso! {len(lote_bq)} itens salvos.")
+                    st.session_state.cont_var = 0
+                    st.cache_data.clear()
+                    st.rerun()
+                else:
+                    st.error(f"Erro BigQuery: {errors}")
+            except Exception as e:
+                st.error(f"Erro: {e}")
+        else:
+            st.error("Preencha o Nome e SKU Base.")
 
 elif st.session_state.pg == "Alterar Preco":
     st.header("📦 Atualização de Preços em Lote")
@@ -659,7 +671,7 @@ elif st.session_state.pg == "Cadastro":
                 with c1:
                     v_sku = st.text_input(f"SKU da Variante {i+1}", key=f"vsku_{i}")
                 with c2:
-                    v_char = st.text_input(f"Cor/Tipo {i+1}", key=f"vchar_{i}")
+                    v_char = st.text_input(f"Cor/Modelo {i+1}", key=f"vchar_{i}")
                 
                 if v_sku and v_char:
                     lista_variantes.append({
@@ -708,6 +720,8 @@ elif st.session_state.pg == "Cadastro":
 # --- SEÇÃO DO DASHBOARD ---
 elif st.session_state.pg == "Dashboard":
     from datetime import timedelta
+    import plotly.graph_objects as go
+    from plotly.subplots import make_subplots
     st.header("📊 Dashboard Financeiro")
     
     if 'processando_venda' not in st.session_state:
@@ -759,12 +773,9 @@ elif st.session_state.pg == "Dashboard":
                             table_id = "leandro-marketplace.DL_Store_Online.tb_vendas_realizadas"
                             v_data_formatada = v_data.strftime("%Y-%m-%d") 
                             row = [{
-                                "produto": str(v_nome_final), 
-                                "sku": str(v_sku_final), 
-                                "preco_venda": float(v_preco_venda), 
-                                "quantidade": int(v_qtd), 
-                                "data": v_data_formatada, # Aqui usa o nome da coluna no BQ
-                                "lucro_total": float(round(lucro_total_dinamico, 2))
+                                "produto": str(v_nome_final), "sku": str(v_sku_final), 
+                                "preco_venda": float(v_preco_venda), "quantidade": int(v_qtd), 
+                                "data": v_data_formatada, "lucro_total": float(round(lucro_total_dinamico, 2))
                             }]
                             errors = client_bq.insert_rows_json(table_id, row)
                             if not errors:
@@ -774,7 +785,7 @@ elif st.session_state.pg == "Dashboard":
                         except Exception as e:
                             st.error(f"Erro: {e}"); st.session_state.processando_venda = False
 
-    # --- 2. SEÇÃO DE GRÁFICOS E HISTÓRICO ---
+    # --- 2. SEÇÃO DE GRÁFICOS ---
     st.divider()
     try:
         query = "SELECT * FROM `leandro-marketplace.DL_Store_Online.tb_vendas_realizadas` ORDER BY data DESC"
@@ -788,80 +799,78 @@ elif st.session_state.pg == "Dashboard":
             df_vendas['Faturamento'] = df_vendas['Preço Venda'] * df_vendas['Quantidade']
             df_vendas['Data'] = pd.to_datetime(df_vendas['Data'])
             
-# Correção para garantir que o "hoje" seja sempre o horário de Brasília
             hoje = datetime.utcnow() - timedelta(hours=3)
             inicio_mes_atual = hoje.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
 
-            # --- SEPARAÇÃO LÓGICA ---
-            # 1. Meses Passados (Agrupados por Mês)
+            # Agrupamento barras
             df_passado = df_vendas[df_vendas['Data'] < inicio_mes_atual].copy()
             barras_meses_fechados = pd.DataFrame()
             if not df_passado.empty:
-                # Tradução manual simples dos meses
                 meses_map = {1:'Jan', 2:'Fev', 3:'Mar', 4:'Abr', 5:'Mai', 6:'Jun', 7:'Jul', 8:'Ago', 9:'Set', 10:'Out', 11:'Nov', 12:'Dez'}
                 df_passado['Mes_Ano'] = df_passado['Data'].dt.month.map(meses_map) + "/" + df_passado['Data'].dt.year.astype(str).str[-2:]
-                barras_meses_fechados = df_passado.groupby('Mes_Ano').agg({'Faturamento':'sum', 'Lucro Total':'sum'}).reset_index()
+                barras_meses_fechados = df_passado.groupby('Mes_Ano').agg({'Faturamento':'sum', 'Lucro Total':'sum', 'Quantidade':'sum'}).reset_index()
                 barras_meses_fechados['Outros Custos'] = barras_meses_fechados['Faturamento'] - barras_meses_fechados['Lucro Total']
                 barras_meses_fechados.rename(columns={'Mes_Ano': 'Data_Label'}, inplace=True)
 
-            # 2. Mês Atual (Total Acumulado + Detalhe Diário)
             df_atual_full = df_vendas[df_vendas['Data'] >= inicio_mes_atual].copy()
             df_plot_atual = pd.DataFrame()
             if not df_atual_full.empty:
-                # Barra Total do Mês Atual
-                total_atual = pd.DataFrame([{
-                    'Data_Label': 'Mês Atual', 
-                    'Faturamento': df_atual_full['Faturamento'].sum(),
-                    'Lucro Total': df_atual_full['Lucro Total'].sum(),
-                    'Outros Custos': df_atual_full['Faturamento'].sum() - df_atual_full['Lucro Total'].sum()
-                }])
-                # Detalhe Diário
-                df_diario = df_atual_full.groupby('Data').agg({'Faturamento':'sum', 'Lucro Total':'sum'}).reset_index()
+                total_atual = pd.DataFrame([{'Data_Label': 'Mês Atual', 'Faturamento': df_atual_full['Faturamento'].sum(), 'Lucro Total': df_atual_full['Lucro Total'].sum(), 'Quantidade': df_atual_full['Quantidade'].sum(), 'Outros Custos': df_atual_full['Faturamento'].sum() - df_atual_full['Lucro Total'].sum()}])
+                df_diario = df_atual_full.groupby('Data').agg({'Faturamento':'sum', 'Lucro Total':'sum', 'Quantidade':'sum'}).reset_index()
                 df_diario['Outros Custos'] = df_diario['Faturamento'] - df_diario['Lucro Total']
                 df_diario['Data_Label'] = df_diario['Data'].dt.strftime('%d/%m')
                 df_plot_atual = pd.concat([total_atual, df_diario], ignore_index=True)
 
-            # Unindo tudo para o gráfico
             df_plot = pd.concat([barras_meses_fechados, df_plot_atual], ignore_index=True)
 
-            # --- SEÇÃO DO GRÁFICO ---
+            # Criar DF específico para a linha (Removendo "Mês Atual" e meses passados se houver)
+            df_linha = df_plot[~df_plot['Data_Label'].isin(['Mês Atual']) & df_plot['Data_Label'].str.contains('/')].copy()
+
+            # --- GRÁFICO ---
             st.subheader("📈 Desempenho Mensal e Diário")
             with st.container():
                 st.markdown('<div class="plot-container">', unsafe_allow_html=True)
-                fig = go.Figure()
-                fig.add_trace(go.Bar(x=df_plot['Data_Label'], y=df_plot['Outros Custos'], name='Outros Custos', marker_color='#FFF9E6', hovertemplate='R$ %{y:,.2f}<extra></extra>'))
-                fig.add_trace(go.Bar(x=df_plot['Data_Label'], y=df_plot['Lucro Total'], name='Lucro Líquido', marker_color='#FFD700', hovertemplate='R$ %{y:,.2f}<extra></extra>', text=df_plot['Lucro Total'].apply(lambda x: f'R$ {x:,.2f}'), textposition='outside', textfont=dict(size=14, color='black', family="Arial Black")))
+                fig = make_subplots(specs=[[{"secondary_y": True}]])
                 
+                # Barras
+                fig.add_trace(go.Bar(x=df_plot['Data_Label'], y=df_plot['Outros Custos'], name='Outros Custos', marker_color='#FFF9E6', hovertemplate='R$ %{y:,.2f}<extra></extra>'), secondary_y=False)
+                fig.add_trace(go.Bar(x=df_plot['Data_Label'], y=df_plot['Lucro Total'], name='Lucro Líquido', marker_color='#FFD700', hovertemplate='R$ %{y:,.2f}<extra></extra>', text=df_plot['Lucro Total'].apply(lambda x: f'R$ {x:,.2f}'), textposition='outside', textfont=dict(size=14, color='black', family="Arial Black")), secondary_y=False)
+                
+                # Linha Cinza Escuro (Desvinculada do Mês Atual)
+                fig.add_trace(go.Scatter(
+                    x=df_linha['Data_Label'], y=df_linha['Quantidade'], name='Qtd Vendas', mode='lines+markers+text',
+                    line=dict(color='#333333', width=2), marker=dict(size=7, color='#333333'),
+                    text=df_linha['Quantidade'], textposition="top center",
+                    textfont=dict(size=12, color='#333333', family="Arial Black"),
+                    hovertemplate='Vendas: %{y}<extra></extra>'
+                ), secondary_y=True)
+
                 fig.update_layout(
                     barmode='stack', paper_bgcolor='white', plot_bgcolor='white', 
-                    yaxis=dict(showgrid=False, zeroline=False, showticklabels=False, fixedrange=True, range=[0, df_plot['Faturamento'].max() * 1.5]), 
+                    yaxis=dict(showgrid=False, zeroline=False, showticklabels=False, fixedrange=True, range=[0, df_plot['Faturamento'].max() * 2.2]), 
+                    yaxis2=dict(showgrid=False, zeroline=False, showticklabels=False, fixedrange=True, range=[df_plot['Quantidade'].max() * -1.5, df_plot['Quantidade'].max() * 1.2]),
                     xaxis=dict(title="Competência / Dias", showgrid=False, showline=True, linecolor='black', tickfont=dict(color='black', size=13)), 
                     legend=dict(orientation="h", yanchor="bottom", y=1.1, xanchor="center", x=0.5, font=dict(color="black", size=14)), 
-                    margin=dict(l=10, r=10, t=80, b=60), hovermode='closest'
+                    margin=dict(l=10, r=10, t=80, b=60), hovermode='x unified'
                 )
                 st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
                 st.markdown('</div>', unsafe_allow_html=True)
 
-            # Métricas Gerais
+            # Métricas
             c1, c2, c3 = st.columns(3)
             c1.metric("Faturamento Total", f"R$ {df_vendas['Faturamento'].sum():.2f}")
             c2.metric("Lucro Líquido", f"R$ {df_vendas['Lucro Total'].sum():.2f}")
             c3.metric("Itens Vendidos", int(df_vendas['Quantidade'].sum()))
 
-            # --- HISTÓRICO ---
             st.divider()
             st.subheader("📋 Histórico de Vendas")
             st.markdown("""<div style="display: flex; font-weight: bold; background-color: #f8f9fa; padding: 10px 15px; border: 1px solid #e6e6e6; border-radius: 10px 10px 0 0;"><div style="flex: 3;">Produto</div><div style="flex: 2;">SKU</div><div style="flex: 1;">Qtd</div><div style="flex: 2;">Data</div><div style="flex: 2;">Lucro</div><div style="flex: 1;">Ação</div></div>""", unsafe_allow_html=True)
-            st.markdown('<div class="historico-scroll-container">', unsafe_allow_html=True)
             for idx, row in df_vendas.iterrows():
-                st.markdown('<div class="linha-historico">', unsafe_allow_html=True)
                 cols = st.columns([3, 2, 1, 2, 2, 1])
                 cols[0].write(row['Produto']); cols[1].write(f"`{row['SKU']}`"); cols[2].write(str(int(row['Quantidade']))); cols[3].write(row['Data'].strftime('%d/%m/%Y')); cols[4].write(f"R$ {row['Lucro Total']:.2f}")
                 if cols[5].button("❌", key=f"del_{idx}"):
                     client_bq.query(f"DELETE FROM `leandro-marketplace.DL_Store_Online.tb_vendas_realizadas` WHERE sku = '{row['SKU']}' AND data = '{row['Data'].strftime('%Y-%m-%d')}' AND lucro_total = {row['Lucro Total']}").result()
                     st.cache_data.clear(); st.rerun()
-                st.markdown('</div>', unsafe_allow_html=True)
-            st.markdown('</div>', unsafe_allow_html=True)
         else:
             st.info("Nenhuma venda registrada ainda.")
     except Exception as e:
