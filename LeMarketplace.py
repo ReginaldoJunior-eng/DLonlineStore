@@ -445,6 +445,7 @@ elif st.session_state.pg == "Análise de Vendas":
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
 
+# --- SEÇÃO DE CADASTRO ---
 elif st.session_state.pg == "Cadastro":
     st.header("📝 Novo Item na Base")
     
@@ -452,93 +453,110 @@ elif st.session_state.pg == "Cadastro":
         st.session_state.cont_var = 0
 
     col_btn1, col_btn2, _ = st.columns([0.8, 0.8, 4])
-    
     with col_btn1:
         if st.button("➕ Variante", type="secondary"):
             st.session_state.cont_var += 1
             st.rerun()
-            
     with col_btn2:
         if st.button("🗑️ Limpar", type="secondary"):
             st.session_state.cont_var = 0
             st.rerun()
 
-    # --- CAMPOS PRINCIPAIS ---
+    # --- CAMPOS REATIVOS (FORA DO FORM PARA VALIDAÇÃO EM TEMPO REAL) ---
     m = st.selectbox("Marketplace", ["shein", "shopee", "temu", "todos"])
     n = st.text_input("Nome Base do Produto")
-    s_base = st.text_input("SKU Base")
     
-    # Este é o custo que as variantes vão "copiar"
-    c_padrao = st.number_input("Custo Unitário (R$)", min_value=0.01, step=0.01, value=0.01)
+    # Campo SKU Base
+    s_base = st.text_input("SKU Base", help="Digite o SKU e aperte Enter ou clique fora para validar")
     
+    # Coleta de Variantes fora do formulário
     lista_variantes = []
-    
-    # --- VARIANTES ---
     if st.session_state.cont_var > 0:
-        st.divider()
+        st.write("---")
         for i in range(st.session_state.cont_var):
-            c1, c2, c3 = st.columns([2, 2, 1])
-            
+            c1, c2 = st.columns(2)
             with c1:
-                v_sku = st.text_input(f"SKU da Variante {i+1}", key=f"vsku_{i}")
+                v_sku = st.text_input(f"SKU Variante {i+1}", key=f"vsku_{i}")
             with c2:
                 v_char = st.text_input(f"Cor/Modelo {i+1}", key=f"vchar_{i}")
-            with c3:
-                # O SEGREDO: A key muda se o c_padrao mudar. 
-                # Isso força o Streamlit a atualizar o valor visual na tela.
-                v_custo = st.number_input(
-                    f"Custo {i+1}", 
-                    min_value=0.01, 
-                    step=0.01, 
-                    value=c_padrao, 
-                    key=f"vcost_{i}_{c_padrao}" 
-                )
+            if v_sku:
+                lista_variantes.append({"nome": f"{n} {v_char}", "sku": v_sku.strip().upper()})
+
+    # --- LÓGICA DE VALIDAÇÃO (BASE + VARIANTES) ---
+    sku_bloqueado = False
+    todos_skus_digitados = []
+    
+    if s_base:
+        todos_skus_digitados.append(s_base.strip().upper())
+    for v in lista_variantes:
+        todos_skus_digitados.append(v['sku'])
+
+    if todos_skus_digitados:
+        try:
+            # Formata a lista para o SQL: ('SKU1', 'SKU2')
+            format_skus = ", ".join([f"'{s}'" for s in todos_skus_digitados])
             
-            if v_sku and v_char:
-                lista_variantes.append({
-                    "nome_completo": f"{n} {v_char}", 
-                    "sku_variante": v_sku,
-                    "custo_variante": v_custo
-                })
-
-    st.divider()
-
-    # --- SALVAR ---
-    if st.button("🚀 Salvar Tudo no BigQuery", type="primary"):
-        if n and s_base:
-            try:
-                table_id_produtos = "leandro-marketplace.DL_Store_Online.tb_produtos"
-                mkt_list = ["shein", "shopee", "temu"] if m == "todos" else [m]
+            # Busca na coluna SKU (maiúscula) da tb_produtos
+            q_verificacao = f"SELECT SKU FROM `leandro-marketplace.DL_Store_Online.tb_produtos` WHERE SKU IN ({format_skus})"
+            verificacao_df = client_bq.query(q_verificacao).to_dataframe()
+            
+            if not verificacao_df.empty:
+                # O .unique() garante que o SKU apareça apenas 1 vez no erro, mesmo que exista em vários marketplaces
+                skus_conflito = verificacao_df['SKU'].unique().tolist()
                 
-                lote_bq = []
-                for aba in mkt_list:
-                    # Item Base
-                    lote_bq.append({
-                        "marketplace": aba, "sku": str(s_base),
-                        "produto": str(n), "custo_aquisicao": float(c_padrao)
-                    })
-                    # Variantes
-                    for var in lista_variantes:
-                        lote_bq.append({
-                            "marketplace": aba,
-                            "sku": str(var['sku_variante']),
-                            "produto": str(var['nome_completo']),
-                            "custo_aquisicao": float(var['custo_variante'])
+                st.error(f"❌ ERRO: O(s) SKU(s) {skus_conflito} JÁ EXISTE(M)! Altere para salvar.")
+                sku_bloqueado = True
+            else:
+                st.success("✅ Todos os SKUs informados estão disponíveis.")
+                sku_bloqueado = False
+        except Exception as e:
+            st.caption("Conectando ao BigQuery para validar SKUs...")
+
+    # --- FORMULÁRIO FINAL (CUSTO E BOTÃO SALVAR) ---
+    with st.form("botao_salvar"):
+        c = st.number_input("Custo Unitário (R$)", min_value=0.01, step=0.01)
+        
+        salvar_final = st.form_submit_button("🚀 Salvar Tudo no BigQuery", type="primary")
+
+        if salvar_final:
+            if sku_bloqueado:
+                st.error("🚨 Gravação interrompida! Corrija os SKUs duplicados antes de salvar.")
+            elif not n or not s_base:
+                st.error("⚠️ Preencha os campos obrigatórios: Nome e SKU Base.")
+            else:
+                try:
+                    mkt_list = ["shein", "shopee", "temu"] if m == "todos" else [m]
+                    lote = []
+                    
+                    for aba in mkt_list:
+                        # Adiciona SKU Base ao lote
+                        lote.append({
+                            "marketplace": aba, 
+                            "SKU": str(s_base).strip().upper(), 
+                            "produto": str(n), 
+                            "custo_aquisicao": float(c)
                         })
-                
-                errors = client_bq.insert_rows_json(table_id_produtos, lote_bq)
-                
-                if not errors:
-                    st.success(f"✅ Sucesso! {len(lote_bq)} itens salvos.")
-                    st.session_state.cont_var = 0
-                    st.cache_data.clear()
-                    st.rerun()
-                else:
-                    st.error(f"Erro BigQuery: {errors}")
-            except Exception as e:
-                st.error(f"Erro: {e}")
-        else:
-            st.error("Preencha o Nome e SKU Base.")
+                        # Adiciona cada Variante ao lote
+                        for v in lista_variantes:
+                            lote.append({
+                                "marketplace": aba, 
+                                "SKU": str(v['sku']), 
+                                "produto": str(v['nome']), 
+                                "custo_aquisicao": float(c)
+                            })
+                    
+                    # Envio para o BigQuery
+                    erros = client_bq.insert_rows_json("leandro-marketplace.DL_Store_Online.tb_produtos", lote)
+                    
+                    if not erros:
+                        st.success("✅ Tudo pronto! Dados salvos com sucesso.")
+                        st.cache_data.clear() # Limpa o cache para a próxima consulta ser atualizada
+                        st.session_state.cont_var = 0 # Reseta variantes
+                        st.rerun()
+                    else:
+                        st.error(f"Erro ao inserir no BigQuery: {erros}")
+                except Exception as e:
+                    st.error(f"Falha técnica na gravação: {e}")
 
 elif st.session_state.pg == "Alterar Preco":
     st.header("📦 Atualização de Preços em Lote")
@@ -640,81 +658,7 @@ elif st.session_state.pg == "Alterar Preco":
     else:
         st.write("") # Espaçador visual
 
-# --- SEÇÃO DE CADASTRO ---
-elif st.session_state.pg == "Cadastro":
-    st.header("📝 Novo Item na Base")
-    if 'cont_var' not in st.session_state:
-        st.session_state.cont_var = 0
 
-    col_btn1, col_btn2, _ = st.columns([0.8, 0.8, 4])
-    with col_btn1:
-        if st.button("➕ Variante", type="secondary"):
-            st.session_state.cont_var += 1
-            st.rerun()
-    with col_btn2:
-        if st.button("🗑️ Limpar", type="secondary"):
-            st.session_state.cont_var = 0
-            st.rerun()
-
-    with st.form("cad_final", clear_on_submit=True):
-        m = st.selectbox("Marketplace", ["shein", "shopee", "temu", "todos"])
-        n = st.text_input("Nome Base do Produto")
-        s_base = st.text_input("SKU Base")
-        # No BigQuery guardamos como número (float), então não precisa de .replace(',', '.')
-        c = st.number_input("Custo Unitário (R$)", min_value=0.01, step=0.01)
-        
-        lista_variantes = []
-        if st.session_state.cont_var > 0:
-            st.divider()
-            for i in range(st.session_state.cont_var):
-                c1, c2 = st.columns(2)
-                with c1:
-                    v_sku = st.text_input(f"SKU da Variante {i+1}", key=f"vsku_{i}")
-                with c2:
-                    v_char = st.text_input(f"Cor/Modelo {i+1}", key=f"vchar_{i}")
-                
-                if v_sku and v_char:
-                    lista_variantes.append({
-                        "nome_completo": f"{n} {v_char}", 
-                        "sku_variante": v_sku
-                    })
-
-        st.divider()
-        if st.form_submit_button("🚀 Salvar Tudo no BigQuery", type="primary"):
-            if n and s_base:
-                try:
-                    table_id_produtos = "leandro-marketplace.DL_Store_Online.tb_produtos"
-                    mkt_list = ["shein", "shopee", "temu"] if m == "todos" else [m]
-                    
-                    lote_bq = []
-                    for aba in mkt_list:
-                        lote_bq.append({
-                            "marketplace": aba,
-                            "sku": str(s_base),
-                            "produto": str(n),
-                            "custo_aquisicao": float(c)
-                        })
-                        for var in lista_variantes:
-                            lote_bq.append({
-                                "marketplace": aba,
-                                "sku": str(var['sku_variante']),
-                                "produto": str(var['nome_completo']),
-                                "custo_aquisicao": float(c)
-                            })
-                    
-                    errors = client_bq.insert_rows_json(table_id_produtos, lote_bq)
-                    
-                    if not errors:
-                        st.success(f"✅ Sucesso! {len(lote_bq)} itens salvos no BigQuery.")
-                        st.session_state.cont_var = 0 
-                        st.cache_data.clear()
-                    else:
-                        st.error(f"Erro nas colunas do BigQuery: {errors}")
-                
-                except Exception as e:
-                    st.error(f"Erro de conexão: {e}")
-            else:
-                st.error("Preencha o Nome e SKU Base.")
 
 
 # --- SEÇÃO DO DASHBOARD ---
