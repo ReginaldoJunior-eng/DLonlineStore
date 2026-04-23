@@ -256,6 +256,7 @@ with st.sidebar:
                 st.error("Usuário ou senha incorretos.")
     else:
         st.subheader(f"👋 Olá, Leandro")
+        if st.button("✅ Pendências"): st.session_state.pg = "Pendencias"
         if st.button("📊 Comparativo de Preços"): st.session_state.pg = "Calculadora"
         if st.button("📝 Novo Item na Base"): st.session_state.pg = "Cadastro"
         if st.button("💰 Alterar Preços"):    st.session_state.pg = "Alterar Preco"
@@ -373,11 +374,62 @@ if st.session_state.logado and client_bq:
 
 # --- NAVEGAÇÃO ENTRE PÁGINAS ---
 
-# 1. PÁGINA CALCULADORA
-if st.session_state.pg == "Calculadora":
+# --- PÁGINA PENDÊNCIAS ---
+if st.session_state.pg == "Pendencias":
+    st.header("📋 Pendências e Anotações")
+
+    # Inicializa a lista se não existir
+    if 'lista_pendencias' not in st.session_state:
+        st.session_state.lista_pendencias = []
+
+    # Bloco de Input
+    with st.container(border=True):
+        col_input, col_btn = st.columns([3, 1])
+        with col_input:
+            nova_nota = st.text_input("O que precisa ser feito?", placeholder="Ex: conferir preços...", key="txt_nova_pendencia")
+        with col_btn:
+            st.markdown('<div style="padding-top: 28px;"></div>', unsafe_allow_html=True)
+            if st.button("Adicionar", use_container_width=True, type="primary"):
+                if nova_nota:
+                    # Salva como um dicionário para controlar o status individual
+                    st.session_state.lista_pendencias.append({"tarefa": nova_nota, "concluido": False})
+                    st.rerun()
+
+    st.divider()
+    st.subheader("📝 Minha Lista")
+
+    # Renderiza a lista
+    if st.session_state.lista_pendencias:
+        # Criamos uma cópia para iterar e poder remover itens sem dar erro de índice
+        for i, item in enumerate(st.session_state.lista_pendencias):
+            col_check, col_texto, col_excluir = st.columns([0.5, 8.5, 1])
+            
+            with col_check:
+                # Checkbox atualiza o status de concluído
+                status = st.checkbox(" ", value=item["concluido"], key=f"check_{i}")
+                st.session_state.lista_pendencias[i]["concluido"] = status
+            
+            with col_texto:
+                # Se estiver marcado, risca o texto
+                if status:
+                    st.markdown(f"~~{item['tarefa']}~~")
+                else:
+                    st.write(item["tarefa"])
+            
+            with col_excluir:
+                # Botão de X vermelho para excluir
+                if st.button("❌", key=f"del_{i}", help="Excluir pendência"):
+                    st.session_state.lista_pendencias.pop(i)
+                    st.rerun()
+    else:
+        st.info("Nenhuma pendência na lista.")
+
+# 2. PÁGINA CALCULADORA
+elif st.session_state.pg == "Calculadora":
     st.header("📊 Comparativo de Preços")
     if not df_base_completa.empty:
         df_geral = df_base_completa.copy()
+        # Garanta que a função converter_custo_seguro esteja definida no seu código global
         df_geral['Custo_aquisicao_num'] = df_geral['Custo_aquisicao'].apply(converter_custo_seguro)
         
         col_sel1, col_sel2 = st.columns(2)
@@ -397,16 +449,17 @@ if st.session_state.pg == "Calculadora":
             final_item = df_geral[df_geral['Produto'] == prod_sel].iloc[0]
 
         if final_item is not None:
-            custo_aq = final_item['Custo_aquisicao_num']
+            cust_aq = final_item['Custo_aquisicao_num']
             st.info(f"Selecionado: {final_item['Produto']} | SKU: {final_item['SKU']}")
             margem_input = st.number_input("Margem de Lucro Desejada (%)", min_value=1.0, value=15.0, step=1.0)
             
-            p_shein, l_shein = calcular_venda_completo(custo_aq, margem_input, "shein")
-            p_shopee, l_shopee = calcular_venda_completo(custo_aq, margem_input, "shopee")
-            p_temu, l_temu = calcular_venda_completo(custo_aq, margem_input, "temu")
+            # Garanta que a função calcular_venda_completo esteja definida no seu código global
+            p_shein, l_shein = calcular_venda_completo(cust_aq, margem_input, "shein")
+            p_shopee, l_shopee = calcular_venda_completo(cust_aq, margem_input, "shopee")
+            p_temu, l_temu = calcular_venda_completo(cust_aq, margem_input, "temu")
             
             st.divider()
-            st.metric("Custo de Aquisição Base", f"R$ {custo_aq:.2f}")
+            st.metric("Custo de Aquisição Base", f"R$ {cust_aq:.2f}")
             res = {
                 "Canal": ["SHEIN", "SHOPEE", "TEMU"], 
                 "Preço Sugerido": [f"R$ {p_shein:.2f}", f"R$ {p_shopee:.2f}", f"R$ {p_temu:.2f}"], 
