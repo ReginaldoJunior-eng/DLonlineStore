@@ -7,19 +7,26 @@ import json
 import os
 import io
 import base64
-from datetime import datetime
+import uuid
+from datetime import datetime, timedelta
 from google.cloud import bigquery
 from google.oauth2 import service_account
-import plotly.graph_objects as go # Importando Plotly
+import plotly.graph_objects as go
+
+# --- CONFIGURAÇÕES DE INICIALIZAÇÃO ---
 if 'processando_venda' not in st.session_state:
     st.session_state.processando_venda = False
-from datetime import datetime, timedelta
 
+if 'pg' not in st.session_state: 
+    st.session_state.pg = "Início"
+
+if 'logado' not in st.session_state: 
+    st.session_state.logado = False
 
 # --- CONFIGURAÇÕES DE PÁGINA ---
 st.set_page_config(
     page_title="D.L Online Store", 
-    page_icon="🛒", # <--- ALTERE AQUI (Pode colar o emoji do carrinho)
+    page_icon="🛒", 
     layout="wide", 
     initial_sidebar_state="expanded"
 )
@@ -31,14 +38,12 @@ st.markdown("""
     [data-testid="stSidebar"] { background-color: #f8f9fa !important; border-right: 1px solid #e6e6e6; }
     h1, h2, h3, p, span, label, .stMarkdown { color: #31333F !important; }
     
-    /* Borda sutil nas tabelas padrão */
     .stTable, [data-testid="stTable"] {
         border: 1px solid #f0f0f0 !important;
         border-radius: 10px !important;
         overflow: hidden !important;
     }
 
-    /* Borda sutil nos containers de gráficos/cards */
     .plot-container {
         border: 1px solid #e6e6e6 !important; 
         border-radius: 12px !important;
@@ -47,12 +52,11 @@ st.markdown("""
         box-shadow: 0px 2px 4px rgba(0,0,0,0.05);
     }
 
-    /* ESTILO DA TABELA DE HISTÓRICO (LATERAIS, ZEBRA, HOVER E SCROLL) */
     .historico-scroll-container {
-        border: 1px solid #e6e6e6 !important; /* Bordas laterais e completas */
+        border: 1px solid #e6e6e6 !important;
         border-radius: 10px !important;
-        max-height: 800px !important; /* Altura aproximada para 20 itens */
-        overflow-y: auto !important; /* Barra de rolagem se exceder */
+        max-height: 800px !important;
+        overflow-y: auto !important;
         background-color: white;
     }
     
@@ -64,14 +68,9 @@ st.markdown("""
         align-items: center;
     }
     
-    /* Efeito Zebra: cores alternadas */
     .linha-historico:nth-child(odd) { background-color: #ffffff; }
     .linha-historico:nth-child(even) { background-color: #f9f9f9; }
-    
-    /* Efeito Hover: cor ao passar o mouse */
-    .linha-historico:hover {
-        background-color: #FFF9E6 !important;
-    }
+    .linha-historico:hover { background-color: #FFF9E6 !important; }
 
     section[data-testid="stSidebar"] .stButton button {
         width: 100% !important;
@@ -87,10 +86,7 @@ st.markdown("""
         display: block !important;
     }
     
-    section[data-testid="stSidebar"] .stButton p {
-        font-size: 14px !important;
-        white-space: nowrap !important;
-    }
+    section[data-testid="stSidebar"] .stButton p { font-size: 14px !important; white-space: nowrap !important; }
 
     section[data-testid="stSidebar"] .stButton button:hover { 
         background-color: #FFF9E6 !important; 
@@ -107,131 +103,113 @@ st.markdown("""
         padding-left: 0px !important;
     }
 
-    [data-testid="stImage"] img {
-        height: auto; 
-        object-fit: contain; 
-        width: 100%;
-    }
+    [data-testid="stImage"] img { height: auto; object-fit: contain; width: 100%; }
     </style>
     """, unsafe_allow_html=True)
 
-# --- CONEXÃO COM BIGQUERY (NOVO BANCO DO LEANDRO) ---
-
+# --- CONEXÃO COM BIGQUERY ---
 @st.cache_resource
 def conectar_bigquery():
-    from google.cloud import bigquery
-    from google.oauth2 import service_account
-
     try:
-        # 1. Busca os dados do segredo que você configurou
         info = st.secrets["gcp_service_account"]
-
-        # 2. Transforma as informações em credenciais válidas
         creds = service_account.Credentials.from_service_account_info(info)
-
-        # 3. Cria o cliente do BigQuery usando essas credenciais
         client = bigquery.Client(credentials=creds, project=info['project_id'])
         return client
-
     except Exception as e:
         st.error(f"Erro ao conectar no BigQuery: {e}")
         return None
 
-# --- ATENÇÃO: Esta linha abaixo deve ficar fora da função (sem espaços no começo) ---
 client_bq = conectar_bigquery()
 
-#if client_bq:
-#    st.success("Motor do BigQuery ligado com sucesso!")
-#else:
-#    st.error("O motor não ligou. Verifique os segredos.")
+# --- FUNÇÕES DE BUSCA ---
+def buscar_produtos_bq():
+    if client_bq:
+        query = "SELECT * FROM `leandro-marketplace.DL_Store_Online.tb_produtos`"
+        return client_bq.query(query).to_dataframe()
+    return pd.DataFrame()
 
-# Função para buscar dados (Substitui a buscar_dados_planilha)
-@st.cache_data(ttl=60)
-def buscar_dados_vendas(_client):
-    query = "SELECT * FROM `leandro-marketplace.vendas_loja.vendas_realizadas` ORDER BY data DESC"
-    return _client.query(query).to_dataframe()
+def buscar_anotacoes_bq():
+    if client_bq:
+        try:
+            query = "SELECT * FROM `leandro-marketplace.DL_Store_Online.tb_anotacoes` ORDER BY data_criacao DESC"
+            return client_bq.query(query).to_dataframe()
+        except:
+            return pd.DataFrame()
+    return pd.DataFrame()
 
-@st.cache_data(ttl=60) # PROTEÇÃO: Lê os dados e segura na memória por 60 segundos
-def buscar_dados_planilha(_planilha, nome_aba):
+def inserir_anotacao_bq(texto):
+    if client_bq:
+        id_nota = str(uuid.uuid4())
+        query = f"""
+            INSERT INTO `leandro-marketplace.DL_Store_Online.tb_anotacoes` (id, anotacao, status_concluido, data_criacao)
+            VALUES ('{id_nota}', '{texto}', false, CURRENT_TIMESTAMP())
+        """
+        client_bq.query(query).result()
+
+def atualizar_status_bq(id_nota, status):
+    if client_bq:
+        st_sql = str(status).lower()
+        query = f"UPDATE `leandro-marketplace.DL_Store_Online.tb_anotacoes` SET status_concluido = {st_sql} WHERE id = '{id_nota}'"
+        client_bq.query(query).result()
+
+def excluir_anotacao_bq(id_nota):
+    if client_bq:
+        query = f"DELETE FROM `leandro-marketplace.DL_Store_Online.tb_anotacoes` WHERE id = '{id_nota}'"
+        client_bq.query(query).result()
+
+# --- INICIALIZAÇÃO DA BASE DE DADOS (ESSENCIAL PARA EVITAR NAMERROR) ---
+df_base_completa = pd.DataFrame()
+
+if st.session_state.logado and client_bq:
     try:
-        if _planilha:
-            return _planilha.worksheet(nome_aba).get_all_values()
-        return None
-    except:
-        return None
+        df_base_completa = buscar_produtos_bq()
+        if not df_base_completa.empty:
+            df_base_completa = df_base_completa.drop_duplicates(subset=['SKU'])
+    except Exception as e:
+        st.error(f"Erro ao carregar base de produtos: {e}")
 
+# --- FUNÇÕES DE CÁLCULO ---
 def converter_custo_seguro(valor_raw):
-    if valor_raw is None or valor_raw == "": 
-        return 0.0
+    if valor_raw is None or valor_raw == "": return 0.0
     s = str(valor_raw).replace('R$', '').replace(' ', '').strip()
     try:
-        if ',' in s and '.' in s:
-            s = s.replace('.', '').replace(',', '.')
-        elif ',' in s:
-            s = s.replace(',', '.')
+        if ',' in s and '.' in s: s = s.replace('.', '').replace(',', '.')
+        elif ',' in s: s = s.replace(',', '.')
         return float(s)
-    except (ValueError, TypeError):
-        return 0.0
+    except: return 0.0
 
 def calcular_venda_completo(custo_aquisicao, margem_percentual, mkt):
-    imposto_tax = 0.06  # 6% de imposto fixo em todos
+    imposto_tax = 0.06
     margem_alvo = margem_percentual / 100
-    custo_embalagem = 1.00  # R$ 1,00 fixo de embalagem
-    
+    custo_embalagem = 1.00
     if mkt == "shein":
-        # SHEIN: 18% de comissão + R$ 5,00 fixos
         comissao_mkt, taxa_fixa = 0.18, 5.0
         divisor = 1 - (comissao_mkt + imposto_tax + margem_alvo)
         preco = (custo_aquisicao + custo_embalagem + taxa_fixa) / divisor if divisor > 0 else 0
         lucro = preco - (preco * comissao_mkt) - (preco * imposto_tax) - custo_aquisicao - custo_embalagem - taxa_fixa
         return preco, lucro
-    
     elif mkt == "shopee":
-        # SHOPEE: Lógica baseada no PREÇO DE VENDA FINAL (Estimativa por faixas)
-        # Como as taxas dependem do preço final, testamos as faixas:
-        
         def testar_faixa(comis, taxa):
             div = 1 - (comis + imposto_tax + margem_alvo)
-            p = (custo_aquisicao + custo_embalagem + taxa) / div if div > 0 else 0
-            return p
-
-        # 1. Tentativa: Até R$ 79,99 (20% + R$ 4)
+            return (custo_aquisicao + custo_embalagem + taxa) / div if div > 0 else 0
         p_venda = testar_faixa(0.20, 4.0)
-        
         if p_venda > 79.99:
-            # 2. Tentativa: R$ 80 a R$ 99,99 (14% + R$ 16)
             p_venda = testar_faixa(0.14, 16.0)
-            
             if p_venda > 99.99:
-                # 3. Tentativa: R$ 100 a R$ 199,99 (14% + R$ 20)
                 p_venda = testar_faixa(0.14, 20.0)
-                
-                if p_venda > 199.99:
-                    # 4. Tentativa: R$ 200 a R$ 499,99 (14% + R$ 26)
-                    p_venda = testar_faixa(0.14, 26.0)
-
-        # Cálculo do lucro real após definir a faixa de preço
-        # Re-identificar comissão e taxa para o cálculo do lucro
+                if p_venda > 199.99: p_venda = testar_faixa(0.14, 26.0)
         if p_venda <= 79.99: c_final, t_final = 0.20, 4.0
         elif p_venda <= 99.99: c_final, t_final = 0.14, 16.0
         elif p_venda <= 199.99: c_final, t_final = 0.14, 20.0
         else: c_final, t_final = 0.14, 26.0
-
         lucro = p_venda - (p_venda * c_final) - (p_venda * imposto_tax) - custo_aquisicao - custo_embalagem - t_final
         return p_venda, lucro
-
     elif mkt == "temu":
-        # TEMU: Sem taxas de marketplace, apenas Imposto (6%) e Embalagem (R$ 1)
         divisor = 1 - (imposto_tax + margem_alvo)
         preco = (custo_aquisicao + custo_embalagem) / divisor if divisor > 0 else 0
         lucro = preco - (preco * imposto_tax) - custo_aquisicao - custo_embalagem
         return preco, lucro
-        
     return 0, 0
-
-# --- ESTADO E NAVEGAÇÃO ---
-if 'pg' not in st.session_state: st.session_state.pg = "Início"
-if 'logado' not in st.session_state: st.session_state.logado = False
 
 # --- SIDEBAR ---
 with st.sidebar:
@@ -252,177 +230,70 @@ with st.sidebar:
                 st.session_state.logado = True
                 st.session_state.pg = "Calculadora" 
                 st.rerun()
-            else:
-                st.error("Usuário ou senha incorretos.")
+            else: st.error("Usuário ou senha incorretos.")
     else:
         st.subheader(f"👋 Olá, Leandro")
         if st.button("✅ Pendências"): st.session_state.pg = "Pendencias"
         if st.button("📊 Comparativo de Preços"): st.session_state.pg = "Calculadora"
         if st.button("📝 Novo Item na Base"): st.session_state.pg = "Cadastro"
-        if st.button("💰 Alterar Preços"):    st.session_state.pg = "Alterar Preco"
+        if st.button("💰 Alterar Preços"): st.session_state.pg = "Alterar Preco"
         if st.button("📈 Análise de Vendas"): st.session_state.pg = "Análise de Vendas"
         if st.button("📦 Gestão de Estoque"): st.session_state.pg = "Gestão de Estoque"
         if st.button("📉 Dashboard Financeiro"): st.session_state.pg = "Dashboard"
-
         st.write("")
         if st.button("🚪 Sair"):
             st.session_state.logado = False
             st.rerun()
 
-# --- PÁGINA INÍCIO ---
+# --- LÓGICA DE PÁGINAS ---
+
 if st.session_state.pg == "Início":
-    caminho_local = r"C:\Users\Junior\Desktop\CodigosPython2\banner_inicio.jpg"
-    if os.path.exists(caminho_local):
-        st.image(caminho_local, use_container_width=True)
-    elif os.path.exists("banner_inicio.jpg"):
-        st.image("banner_inicio.jpg", use_container_width=True)
-    else:
-        st.image("https://images.unsplash.com/photo-1556742049-0cfed4f6a45d?auto=format&fit=crop&w=1000&q=80", use_container_width=True)
-    
     st.markdown("<h1 style='text-align: center;'>Bem-vindo à D.L Online Store</h1>", unsafe_allow_html=True)
     col_a, col_b, col_c = st.columns([1,3,1])
     with col_b:
-        st.markdown("""
-        ### Sua Experiência de Compra Inteligente
-        
-        Na **D.L Online Store**, nossa missão vai além de vender produtos. Estamos focados em conectar você às melhores oportunidades dos maiores marketplaces do mundo, garantindo uma curadoria de qualidade e preços competitivos.
-        
-        #### Nosso Maior Compromisso: Você.
-        
-        Acreditamos que a verdadeira venda só termina quando você está satisfeito. Por isso, fundamentamos nossa operação em:
-        
-        1.  🌟 **Satisfação Garantida:** Trabalhamos incansavelmente para que sua experiência seja perfeita.
-        2.  🛡️ **Qualidade e Confiança:** Selecionamos produtos com rigor para garantir que você receba o melhor.
-        3.  🤝 **Suporte Ágil:** Nossa equipe está sempre pronta para ouvir e resolver suas dúvidas.
-        
-        Obrigado por escolher a **D.L Online Store**. Boas compras!
-        """)
+        st.markdown("""### Sua Experiência de Compra Inteligente...""")
 
 elif st.session_state.pg == "Quem Somos":
     st.header("👥 Quem Somos")
-    st.write("Especialistas em e-commerce e curadoria de produtos de alta qualidade.")
 
 elif st.session_state.pg == "Serviços":
     st.header("🛠️ Nossos Serviços")
-    st.write("Vendas e logística eficiente em marketplaces globais.")
 
 elif st.session_state.pg == "Contato":
     st.header("✉️ Central de Atendimento")
-    whatsapp_url = "https://wa.me/5511960501826"
-    st.markdown(f'<a href="{whatsapp_url}" target="_blank" style="text-decoration: none;"><div style="background-color: #25D366; color: white; padding: 15px; border-radius: 10px; display: inline-block; font-weight: bold; font-size: 18px;">Falar no WhatsApp: (11) 96050-1826</div></a>', unsafe_allow_html=True)
-    st.divider()
-    with st.form("form_contato"):
-        nome = st.text_input("Nome")
-        prod = st.text_input("Produto")
-        tipo = st.selectbox("Assunto", ["Dúvida", "Elogio", "Reclamação"])
-        msg = st.text_area("Mensagem")
-        if st.form_submit_button("Gerar E-mail"):
-            if nome and msg:
-                mailto = f"mailto:vendas.dlonlinestore@gmail.com?subject={tipo}&body={msg}"
-                st.markdown(f'<a href="{mailto}" style="background-color:#007bff; color:white; padding:10px; border-radius:5px; text-decoration:none;">📧 Abrir E-mail</a>', unsafe_allow_html=True)
-
-# --- CONEXÃO COM BIGQUERY (LIGAR O MOTOR) ---
-@st.cache_resource
-def conectar_bigquery():
-    from google.cloud import bigquery
-    from google.oauth2 import service_account
-    try:
-        # Busca os dados do segredo configurado no secrets.toml
-        info = st.secrets["gcp_service_account"]
-        creds = service_account.Credentials.from_service_account_info(info)
-        client = bigquery.Client(credentials=creds, project=info['project_id'])
-        return client
-    except Exception as e:
-        st.error(f"Erro ao conectar no BigQuery: {e}")
-        return None
-
-# Ativa o cliente globalmente para ser usado pelas funções abaixo
-client_bq = conectar_bigquery()
-
-# --- FUNÇÕES DE BUSCA (DEFINIÇÃO DO MOTOR) ---
-
-def buscar_produtos_bq():
-    if client_bq:
-        query = "SELECT * FROM `leandro-marketplace.DL_Store_Online.tb_produtos`"
-        return client_bq.query(query).to_dataframe()
-    return pd.DataFrame()
-
-def buscar_vendas_resumo_bq():
-    if client_bq:
-        query = """
-        SELECT 
-            SUM(preco_venda * quantidade) as faturamento_total,
-            SUM(Llcro_Total) as lucro_total,
-            SUM(quantidade) as itens_vendidos
-        FROM `leandro-marketplace.DL_Store_Online.tb_vendas_realizadas`
-        """
-        return client_bq.query(query).to_dataframe()
-    return pd.DataFrame()
-
-# --- ÁREA RESTRITA (EXECUÇÃO DA BUSCA) ---
-df_base_completa = pd.DataFrame()
-
-if st.session_state.logado and client_bq:
-    try:
-        # Agora o Python reconhece a função pois ela foi definida acima
-        df_base_completa = buscar_produtos_bq()
-        
-        if not df_base_completa.empty:
-            df_base_completa = df_base_completa.drop_duplicates(subset=['SKU'])
-    except Exception as e:
-        st.error(f"Erro ao acessar o BigQuery: {e}")
-
-# --- NAVEGAÇÃO ENTRE PÁGINAS ---
 
 # --- PÁGINA PENDÊNCIAS ---
-if st.session_state.pg == "Pendencias":
-    st.header("📋 Pendências e Anotações")
-
-    # Inicializa a lista se não existir
-    if 'lista_pendencias' not in st.session_state:
-        st.session_state.lista_pendencias = []
-
-    # Bloco de Input
+elif st.session_state.pg == "Pendencias":
+    st.header("📋 Pendências e Anotações (GCP)")
     with st.container(border=True):
         col_input, col_btn = st.columns([3, 1])
         with col_input:
-            nova_nota = st.text_input("O que precisa ser feito?", placeholder="Ex: conferir preços...", key="txt_nova_pendencia")
+            nova_nota = st.text_input("O que precisa ser feito?", placeholder="Ex: estoque...", key="txt_gcp")
         with col_btn:
             st.markdown('<div style="padding-top: 28px;"></div>', unsafe_allow_html=True)
             if st.button("Adicionar", use_container_width=True, type="primary"):
                 if nova_nota:
-                    # Salva como um dicionário para controlar o status individual
-                    st.session_state.lista_pendencias.append({"tarefa": nova_nota, "concluido": False})
+                    inserir_anotacao_bq(nova_nota)
                     st.rerun()
 
     st.divider()
-    st.subheader("📝 Minha Lista")
-
-    # Renderiza a lista
-    if st.session_state.lista_pendencias:
-        # Criamos uma cópia para iterar e poder remover itens sem dar erro de índice
-        for i, item in enumerate(st.session_state.lista_pendencias):
-            col_check, col_texto, col_excluir = st.columns([0.5, 8.5, 1])
-            
-            with col_check:
-                # Checkbox atualiza o status de concluído
-                status = st.checkbox(" ", value=item["concluido"], key=f"check_{i}")
-                st.session_state.lista_pendencias[i]["concluido"] = status
-            
-            with col_texto:
-                # Se estiver marcado, risca o texto
-                if status:
-                    st.markdown(f"~~{item['tarefa']}~~")
-                else:
-                    st.write(item["tarefa"])
-            
-            with col_excluir:
-                # Botão de X vermelho para excluir
-                if st.button("❌", key=f"del_{i}", help="Excluir pendência"):
-                    st.session_state.lista_pendencias.pop(i)
+    df_notas = buscar_anotacoes_bq()
+    if not df_notas.empty:
+        for index, row in df_notas.iterrows():
+            c_check, c_texto, c_del = st.columns([0.5, 8.5, 1])
+            with c_check:
+                check = st.checkbox(" ", value=row['status_concluido'], key=f"check_{row['id']}")
+                if check != row['status_concluido']:
+                    atualizar_status_bq(row['id'], check)
                     st.rerun()
-    else:
-        st.info("Nenhuma pendência na lista.")
+            with c_texto:
+                if row['status_concluido']: st.markdown(f"~~{row['anotacao']}~~")
+                else: st.write(row['anotacao'])
+            with c_del:
+                if st.button("❌", key=f"del_{row['id']}"):
+                    excluir_anotacao_bq(row['id'])
+                    st.rerun()
+
 
 # 2. PÁGINA CALCULADORA
 elif st.session_state.pg == "Calculadora":
