@@ -247,21 +247,59 @@ with st.sidebar:
 
 # --- LÓGICA DE PÁGINAS ---
 
+# --- PÁGINA INÍCIO ---
 if st.session_state.pg == "Início":
+    caminho_local = r"C:\Users\Junior\Desktop\CodigosPython2\banner_inicio.jpg"
+    if os.path.exists(caminho_local):
+        st.image(caminho_local, use_container_width=True)
+    elif os.path.exists("banner_inicio.jpg"):
+        st.image("banner_inicio.jpg", use_container_width=True)
+    else:
+        st.image("https://images.unsplash.com/photo-1556742049-0cfed4f6a45d?auto=format&fit=crop&w=1000&q=80", use_container_width=True)
+    
     st.markdown("<h1 style='text-align: center;'>Bem-vindo à D.L Online Store</h1>", unsafe_allow_html=True)
     col_a, col_b, col_c = st.columns([1,3,1])
     with col_b:
-        st.markdown("""### Sua Experiência de Compra Inteligente...""")
+        st.markdown("""
+        ### Sua Experiência de Compra Inteligente
+        
+        Na **D.L Online Store**, nossa missão vai além de vender produtos. Estamos focados em conectar você às melhores oportunidades dos maiores marketplaces do mundo, garantindo uma curadoria de qualidade e preços competitivos.
+        
+        #### Nosso Maior Compromisso: Você.
+        
+        Acreditamos que a verdadeira venda só termina quando você está satisfeito. Por isso, fundamentamos nossa operação em:
+        
+        1.  🌟 **Satisfação Garantida:** Trabalhamos incansavelmente para que sua experiência seja perfeita.
+        2.  🛡️ **Qualidade e Confiança:** Selecionamos produtos com rigor para garantir que você receba o melhor.
+        3.  🤝 **Suporte Ágil:** Nossa equipe está sempre pronta para ouvir e resolver suas dúvidas.
+        
+        Obrigado por escolher a **D.L Online Store**. Boas compras!
+        """)
 
 elif st.session_state.pg == "Quem Somos":
     st.header("👥 Quem Somos")
+    st.write("Especialistas em e-commerce e curadoria de produtos de alta qualidade.")
 
 elif st.session_state.pg == "Serviços":
     st.header("🛠️ Nossos Serviços")
+    st.write("Vendas e logística eficiente em marketplaces globais.")
 
 elif st.session_state.pg == "Contato":
     st.header("✉️ Central de Atendimento")
+    whatsapp_url = "https://wa.me/5511960501826"
+    st.markdown(f'<a href="{whatsapp_url}" target="_blank" style="text-decoration: none;"><div style="background-color: #25D366; color: white; padding: 15px; border-radius: 10px; display: inline-block; font-weight: bold; font-size: 18px;">Falar no WhatsApp: (11) 96050-1826</div></a>', unsafe_allow_html=True)
+    st.divider()
+    with st.form("form_contato"):
+        nome = st.text_input("Nome")
+        prod = st.text_input("Produto")
+        tipo = st.selectbox("Assunto", ["Dúvida", "Elogio", "Reclamação"])
+        msg = st.text_area("Mensagem")
+        if st.form_submit_button("Gerar E-mail"):
+            if nome and msg:
+                mailto = f"mailto:vendas.dlonlinestore@gmail.com?subject={tipo}&body={msg}"
+                st.markdown(f'<a href="{mailto}" style="background-color:#007bff; color:white; padding:10px; border-radius:5px; text-decoration:none;">📧 Abrir E-mail</a>', unsafe_allow_html=True)
 
+                
 # --- PÁGINA PENDÊNCIAS ---
 elif st.session_state.pg == "Pendencias":
     st.header("📋 Pendências e Anotações (GCP)")
@@ -369,6 +407,7 @@ elif st.session_state.pg == "Análise de Vendas":
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
 
+
 # --- SEÇÃO DE CADASTRO ---
 elif st.session_state.pg == "Cadastro":
     st.header("📝 Novo Item na Base")
@@ -377,110 +416,122 @@ elif st.session_state.pg == "Cadastro":
         st.session_state.cont_var = 0
 
     col_btn1, col_btn2, _ = st.columns([0.8, 0.8, 4])
+    
     with col_btn1:
         if st.button("➕ Variante", type="secondary"):
             st.session_state.cont_var += 1
             st.rerun()
+            
     with col_btn2:
         if st.button("🗑️ Limpar", type="secondary"):
             st.session_state.cont_var = 0
             st.rerun()
 
-    # --- CAMPOS REATIVOS (FORA DO FORM PARA VALIDAÇÃO EM TEMPO REAL) ---
+    # --- CAMPOS PRINCIPAIS ---
     m = st.selectbox("Marketplace", ["shein", "shopee", "temu", "todos"])
     n = st.text_input("Nome Base do Produto")
+    s_base = st.text_input("SKU Base")
     
-    # Campo SKU Base
-    s_base = st.text_input("SKU Base", help="Digite o SKU e aperte Enter ou clique fora para validar")
+    # Este é o custo que as variantes vão "copiar" por padrão
+    c_padrao = st.number_input("Custo Unitário Base (R$)", min_value=0.01, step=0.01, value=0.01)
     
-    # Coleta de Variantes fora do formulário
     lista_variantes = []
+    
+    # --- VARIANTES (COM PREÇO INDIVIDUAL) ---
     if st.session_state.cont_var > 0:
-        st.write("---")
+        st.divider()
         for i in range(st.session_state.cont_var):
-            c1, c2 = st.columns(2)
+            c1, c2, c3 = st.columns([2, 2, 1])
+            
             with c1:
-                v_sku = st.text_input(f"SKU Variante {i+1}", key=f"vsku_{i}")
+                v_sku = st.text_input(f"SKU da Variante {i+1}", key=f"vsku_{i}")
             with c2:
-                v_char = st.text_input(f"Cor/Modelo {i+1}", key=f"vchar_{i}")
+                v_char = st.text_input(f"Cor/Tipo {i+1}", key=f"vchar_{i}")
+            with c3:
+                # O valor inicial é o c_padrao, mas o usuário pode alterar individualmente
+                v_custo = st.number_input(
+                    f"Custo {i+1}", 
+                    min_value=0.01, 
+                    step=0.01, 
+                    value=c_padrao, 
+                    key=f"vcost_{i}_{c_padrao}" 
+                )
+            
             if v_sku:
-                lista_variantes.append({"nome": f"{n} {v_char}", "sku": v_sku.strip().upper()})
+                lista_variantes.append({
+                    "nome_completo": f"{n} {v_char}" if v_char else n, 
+                    "sku_variante": v_sku.strip().upper(),
+                    "custo_variante": v_custo
+                })
 
-    # --- LÓGICA DE VALIDAÇÃO (BASE + VARIANTES) ---
+    # --- LÓGICA DE VALIDAÇÃO DE SKU (NÃO DEIXA DUPLICAR NA BASE) ---
     sku_bloqueado = False
     todos_skus_digitados = []
     
     if s_base:
         todos_skus_digitados.append(s_base.strip().upper())
     for v in lista_variantes:
-        todos_skus_digitados.append(v['sku'])
+        todos_skus_digitados.append(v['sku_variante'])
 
     if todos_skus_digitados:
         try:
-            # Formata a lista para o SQL: ('SKU1', 'SKU2')
             format_skus = ", ".join([f"'{s}'" for s in todos_skus_digitados])
-            
-            # Busca na coluna SKU (maiúscula) da tb_produtos
             q_verificacao = f"SELECT SKU FROM `leandro-marketplace.DL_Store_Online.tb_produtos` WHERE SKU IN ({format_skus})"
             verificacao_df = client_bq.query(q_verificacao).to_dataframe()
             
             if not verificacao_df.empty:
-                # O .unique() garante que o SKU apareça apenas 1 vez no erro, mesmo que exista em vários marketplaces
                 skus_conflito = verificacao_df['SKU'].unique().tolist()
-                
-                st.error(f"❌ ERRO: O(s) SKU(s) {skus_conflito} JÁ EXISTE(M)! Altere para salvar.")
+                st.error(f"❌ ERRO: O(s) SKU(s) {skus_conflito} JÁ EXISTE(M) NO BIGQUERY!")
                 sku_bloqueado = True
             else:
                 st.success("✅ Todos os SKUs informados estão disponíveis.")
                 sku_bloqueado = False
         except Exception as e:
-            st.caption("Conectando ao BigQuery para validar SKUs...")
+            st.caption("Validando SKUs no banco de dados...")
 
-    # --- FORMULÁRIO FINAL (CUSTO E BOTÃO SALVAR) ---
-    with st.form("botao_salvar"):
-        c = st.number_input("Custo Unitário (R$)", min_value=0.01, step=0.01)
-        
-        salvar_final = st.form_submit_button("🚀 Salvar Tudo no BigQuery", type="primary")
+    st.divider()
 
-        if salvar_final:
-            if sku_bloqueado:
-                st.error("🚨 Gravação interrompida! Corrija os SKUs duplicados antes de salvar.")
-            elif not n or not s_base:
-                st.error("⚠️ Preencha os campos obrigatórios: Nome e SKU Base.")
-            else:
-                try:
-                    mkt_list = ["shein", "shopee", "temu"] if m == "todos" else [m]
-                    lote = []
-                    
-                    for aba in mkt_list:
-                        # Adiciona SKU Base ao lote
-                        lote.append({
-                            "marketplace": aba, 
-                            "SKU": str(s_base).strip().upper(), 
-                            "produto": str(n), 
-                            "custo_aquisicao": float(c)
+    # --- BOTÃO SALVAR ---
+    if st.button("🚀 Salvar Tudo no BigQuery", type="primary"):
+        if sku_bloqueado:
+            st.error("🚨 Gravação interrompida! Existem SKUs duplicados.")
+        elif not n or not s_base:
+            st.error("⚠️ Preencha o Nome e o SKU Base.")
+        else:
+            try:
+                table_id_produtos = "leandro-marketplace.DL_Store_Online.tb_produtos"
+                mkt_list = ["shein", "shopee", "temu"] if m == "todos" else [m]
+                
+                lote_bq = []
+                for aba in mkt_list:
+                    # Adiciona o Item Base
+                    lote_bq.append({
+                        "marketplace": aba, 
+                        "sku": str(s_base).strip().upper(),
+                        "produto": str(n), 
+                        "custo_aquisicao": float(c_padrao)
+                    })
+                    # Adiciona as Variantes com seus preços específicos
+                    for var in lista_variantes:
+                        lote_bq.append({
+                            "marketplace": aba,
+                            "sku": str(var['sku_variante']),
+                            "produto": str(var['nome_completo']),
+                            "custo_aquisicao": float(var['custo_variante'])
                         })
-                        # Adiciona cada Variante ao lote
-                        for v in lista_variantes:
-                            lote.append({
-                                "marketplace": aba, 
-                                "SKU": str(v['sku']), 
-                                "produto": str(v['nome']), 
-                                "custo_aquisicao": float(c)
-                            })
-                    
-                    # Envio para o BigQuery
-                    erros = client_bq.insert_rows_json("leandro-marketplace.DL_Store_Online.tb_produtos", lote)
-                    
-                    if not erros:
-                        st.success("✅ Tudo pronto! Dados salvos com sucesso.")
-                        st.cache_data.clear() # Limpa o cache para a próxima consulta ser atualizada
-                        st.session_state.cont_var = 0 # Reseta variantes
-                        st.rerun()
-                    else:
-                        st.error(f"Erro ao inserir no BigQuery: {erros}")
-                except Exception as e:
-                    st.error(f"Falha técnica na gravação: {e}")
+                
+                errors = client_bq.insert_rows_json(table_id_produtos, lote_bq)
+                
+                if not errors:
+                    st.success(f"✅ Sucesso! {len(lote_bq)} registros salvos.")
+                    st.session_state.cont_var = 0
+                    st.cache_data.clear()
+                    st.rerun()
+                else:
+                    st.error(f"Erro BigQuery: {errors}")
+            except Exception as e:
+                st.error(f"Falha técnica: {e}")
+
 
 elif st.session_state.pg == "Alterar Preco":
     st.header("📦 Atualização de Preços em Lote")
