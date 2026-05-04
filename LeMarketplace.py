@@ -212,6 +212,7 @@ def calcular_venda_completo(custo_aquisicao, margem_percentual, mkt):
     return 0, 0
 
 # --- SIDEBAR ---
+# --- SIDEBAR ---
 with st.sidebar:
     st.image("https://cdn-icons-png.flaticon.com/512/3081/3081559.png", width=80)
     st.title("D.L Online Store")
@@ -239,7 +240,13 @@ with st.sidebar:
         if st.button("💰 Alterar Preços"): st.session_state.pg = "Alterar Preco"
         if st.button("📈 Análise de Vendas"): st.session_state.pg = "Análise de Vendas"
         if st.button("📦 Gestão de Estoque"): st.session_state.pg = "Gestão de Estoque"
-        if st.button("📉 Dashboard Financeiro"): st.session_state.pg = "Dashboard"
+        
+        # Alteração feita aqui: resetamos fin_acesso ao clicar
+        if st.button("📉 Dashboard Financeiro"): 
+            st.session_state.fin_acesso = False
+            st.session_state.pg = "Dashboard"
+            st.rerun()
+            
         st.write("")
         if st.button("🚪 Sair"):
             st.session_state.logado = False
@@ -638,6 +645,23 @@ elif st.session_state.pg == "Alterar Preco":
 
 # --- SEÇÃO DO DASHBOARD ---
 elif st.session_state.pg == "Dashboard":
+    # --- SEGUNDA CAMADA DE SEGURANÇA ---
+    if 'fin_acesso' not in st.session_state:
+        st.session_state.fin_acesso = False
+
+    if not st.session_state.fin_acesso:
+        st.header("🔐 Acesso Restrito")
+        col_senha, _ = st.columns([1, 2])
+        with col_senha:
+            senha_financeira = st.text_input("Digite a senha do Dashboard Financeiro", type="password")
+            if st.button("Acessar Dados Sensíveis", type="primary"):
+                # Defina aqui sua senha de segunda camada
+                if senha_financeira == "D@niliz2026": 
+                    st.session_state.fin_acesso = True
+                    st.rerun()
+                else:
+                    st.error("Senha incorreta!")
+        st.stop() # Interrompe a execução aqui até que a senha esteja correta
     from datetime import timedelta
     import plotly.graph_objects as go
     from plotly.subplots import make_subplots
