@@ -718,7 +718,8 @@ elif st.session_state.pg == "Dashboard":
                             row = [{
                                 "produto": str(v_nome_final), "sku": str(v_sku_final), 
                                 "preco_venda": float(v_preco_venda), "quantidade": int(v_qtd), 
-                                "data": v_data_formatada, "lucro_total": float(round(lucro_total_dinamico, 2))
+                                "data": v_data_formatada, "lucro_total": float(round(lucro_total_dinamico, 2)),
+                                "mkt_venda": str(mkt_venda)
                             }]
                             errors = client_bq.insert_rows_json(table_id, row)
                             if not errors:
@@ -735,7 +736,7 @@ elif st.session_state.pg == "Dashboard":
         df_vendas = client_bq.query(query).to_dataframe()
 
         if not df_vendas.empty:
-            df_vendas.columns = ['Produto', 'SKU', 'Preço Venda', 'Quantidade', 'Data', 'Lucro Total']
+            df_vendas.columns = ['Produto', 'SKU', 'Preço Venda', 'Quantidade', 'Data', 'Lucro Total', 'Marketplace']
             df_vendas['Preço Venda'] = pd.to_numeric(df_vendas['Preço Venda'])
             df_vendas['Lucro Total'] = pd.to_numeric(df_vendas['Lucro Total'])
             df_vendas['Quantidade'] = pd.to_numeric(df_vendas['Quantidade'])
@@ -805,6 +806,48 @@ elif st.session_state.pg == "Dashboard":
             c2.metric("Lucro Líquido", f"R$ {df_vendas['Lucro Total'].sum():.2f}")
             c3.metric("Itens Vendidos", int(df_vendas['Quantidade'].sum()))
 
+            # --- ABAIXO DAS MÉTRICAS (c1, c2, c3) E ANTES DO HISTÓRICO ---
+
+# --- NOVO GRÁFICO: SHARE POR PLATAFORMA ---
+            st.divider()
+            st.subheader("💎 Lucro Líquido por Plataforma")
+
+            # Agrupando os dados para a pizza
+            df_pizza = df_vendas.groupby('Marketplace')['Lucro Total'].sum().reset_index()
+
+            # Cores personalizadas
+            cores_map = {'shein': '#FFD700', 'shopee': '#EE4D2D', 'temu': '#FF8C00'}
+            cores_lista = [cores_map.get(m, '#333333') for m in df_pizza['Marketplace']]
+
+            fig_pizza = go.Figure(data=[go.Pie(
+                labels=df_pizza['Marketplace'].str.upper(), 
+                values=df_pizza['Lucro Total'],
+                hole=.4,
+                marker=dict(colors=cores_lista),
+                # Exibe Nome, Valor e Percentual
+                textinfo='label+value+percent', 
+                # Formatação: Nome em Negrito, R$ com 2 casas e % com 1 casa
+                texttemplate='<b>%{label}</b><br>R$ %{value:,.2f}<br>(%{percent:.1%})',
+                hovertemplate='R$ %{value:,.2f}<extra></extra>'
+            )])
+
+            fig_pizza.update_layout(
+                paper_bgcolor='white', # Fundo total branco
+                plot_bgcolor='white',  # Fundo do gráfico branco
+                margin=dict(l=20, r=20, t=30, b=20),
+                showlegend=True,
+                legend=dict(
+                    orientation="h", 
+                    yanchor="bottom", 
+                    y=-0.1, 
+                    xanchor="center", 
+                    x=0.5,
+                    font=dict(color="black") # Texto da legenda em preto
+                )
+            )
+
+            st.plotly_chart(fig_pizza, use_container_width=True, config={'displayModeBar': False})
+            
             st.divider()
             st.subheader("📋 Histórico de Vendas")
             st.markdown("""<div style="display: flex; font-weight: bold; background-color: #f8f9fa; padding: 10px 15px; border: 1px solid #e6e6e6; border-radius: 10px 10px 0 0;"><div style="flex: 3;">Produto</div><div style="flex: 2;">SKU</div><div style="flex: 1;">Qtd</div><div style="flex: 2;">Data</div><div style="flex: 2;">Lucro</div><div style="flex: 1;">Ação</div></div>""", unsafe_allow_html=True)
