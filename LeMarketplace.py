@@ -770,41 +770,129 @@ elif st.session_state.pg == "Dashboard":
             # Criar DF específico para a linha (Removendo "Mês Atual" e meses passados se houver)
             df_linha = df_plot[~df_plot['Data_Label'].isin(['Mês Atual']) & df_plot['Data_Label'].str.contains('/')].copy()
 
-            # --- GRÁFICO ---
+# --- SELEÇÃO DE MÊS E PREPARAÇÃO DE DADOS ---
+            df_vendas['Mes_Ref'] = df_vendas['Data'].dt.strftime('%m/%Y')
+            opcoes_meses = sorted(df_vendas['Mes_Ref'].unique(), reverse=True)
+            
+            col_f, _ = st.columns([2, 4])
+            with col_f:
+                mes_selecionado = st.selectbox("📅 Selecionar Mês para Detalhamento:", opcoes_meses)
+
+            # Filtramos o detalhamento pelo mês escolhido
+            df_detalhe = df_vendas[df_vendas['Mes_Ref'] == mes_selecionado].copy()
+            
+            # 1. Barras de meses fechados (histórico)
+            meses_fechados = df_vendas[df_vendas['Mes_Ref'] != mes_selecionado].copy()
+            barras_hist = pd.DataFrame()
+            if not meses_fechados.empty:
+                meses_map = {1:'Jan', 2:'Fev', 3:'Mar', 4:'Abr', 5:'Mai', 6:'Jun', 7:'Jul', 8:'Ago', 9:'Set', 10:'Out', 11:'Nov', 12:'Dez'}
+                meses_fechados['Label'] = meses_fechados['Data'].dt.month.map(meses_map) + "/" + meses_fechados['Data'].dt.year.astype(str).str[-2:]
+                barras_hist = meses_fechados.groupby('Label').agg({'Faturamento':'sum', 'Lucro Total':'sum', 'Quantidade':'sum'}).reset_index()
+                barras_hist['Outros Custos'] = barras_hist['Faturamento'] - barras_hist['Lucro Total']
+                barras_hist.rename(columns={'Label': 'Data_Label'}, inplace=True)
+
+            # 2. Barra de Total do Mês Selecionado + Dias
+            df_plot_mes = pd.DataFrame()
+            if not df_detalhe.empty:
+                total_mes = pd.DataFrame([{
+                    'Data_Label': f'Total {mes_selecionado}', 
+                    'Faturamento': df_detalhe['Faturamento'].sum(), 
+                    'Lucro Total': df_detalhe['Lucro Total'].sum(), 
+                    'Quantidade': df_detalhe['Quantidade'].sum(), 
+                    'Outros Custos': df_detalhe['Faturamento'].sum() - df_detalhe['Lucro Total'].sum()
+                }])
+                
+                df_dias = df_detalhe.groupby('Data').agg({'Faturamento':'sum', 'Lucro Total':'sum', 'Quantidade':'sum'}).reset_index()
+                df_dias['Outros Custos'] = df_dias['Faturamento'] - df_dias['Lucro Total']
+                df_dias['Data_Label'] = df_dias['Data'].dt.strftime('%d/%m')
+                df_plot_mes = pd.concat([total_mes, df_dias], ignore_index=True)
+
+            # DataFrame final para as BARRAS
+            df_plot = pd.concat([barras_hist, df_plot_mes], ignore_index=True)
+            
+            # DataFrame para a LINHA (não inclui os totais acumulados, apenas pontos temporais)
+            df_linha = df_plot[~df_plot['Data_Label'].str.contains('Total')].copy()
+
+            # --- GRÁFICO (O TRECHO QUE VOCÊ PEDIU) ---
             st.subheader("📈 Desempenho Mensal e Diário")
             with st.container():
                 st.markdown('<div class="plot-container">', unsafe_allow_html=True)
                 fig = make_subplots(specs=[[{"secondary_y": True}]])
                 
                 # Barras
-                fig.add_trace(go.Bar(x=df_plot['Data_Label'], y=df_plot['Outros Custos'], name='Outros Custos', marker_color='#FFF9E6', hovertemplate='R$ %{y:,.2f}<extra></extra>'), secondary_y=False)
-                fig.add_trace(go.Bar(x=df_plot['Data_Label'], y=df_plot['Lucro Total'], name='Lucro Líquido', marker_color='#FFD700', hovertemplate='R$ %{y:,.2f}<extra></extra>', text=df_plot['Lucro Total'].apply(lambda x: f'R$ {x:,.2f}'), textposition='outside', textfont=dict(size=14, color='black', family="Arial Black")), secondary_y=False)
+                fig.add_trace(go.Bar(
+                    x=df_plot['Data_Label'], 
+                    y=df_plot['Outros Custos'], 
+                    name='Outros Custos', 
+                    marker_color='#FFF9E6', 
+                    hovertemplate='R$ %{y:,.2f}<extra></extra>'
+                ), secondary_y=False)
                 
-                # Linha Cinza Escuro (Desvinculada do Mês Atual)
+                fig.add_trace(go.Bar(
+                    x=df_plot['Data_Label'], 
+                    y=df_plot['Lucro Total'], 
+                    name='Lucro Líquido', 
+                    marker_color='#FFD700', 
+                    hovertemplate='R$ %{y:,.2f}<extra></extra>', 
+                    text=df_plot['Lucro Total'].apply(lambda x: f'R$ {x:,.2f}'), 
+                    textposition='outside', 
+                    textfont=dict(size=14, color='black', family="Arial Black")
+                ), secondary_y=False)
+                
+                # Linha Cinza Escuro
                 fig.add_trace(go.Scatter(
-                    x=df_linha['Data_Label'], y=df_linha['Quantidade'], name='Qtd Vendas', mode='lines+markers+text',
-                    line=dict(color='#333333', width=2), marker=dict(size=7, color='#333333'),
-                    text=df_linha['Quantidade'], textposition="top center",
+                    x=df_linha['Data_Label'], 
+                    y=df_linha['Quantidade'], 
+                    name='Qtd Vendas', 
+                    mode='lines+markers+text',
+                    line=dict(color='#333333', width=2), 
+                    marker=dict(size=7, color='#333333'),
+                    text=df_linha['Quantidade'], 
+                    textposition="top center",
                     textfont=dict(size=12, color='#333333', family="Arial Black"),
                     hovertemplate='Vendas: %{y}<extra></extra>'
                 ), secondary_y=True)
 
                 fig.update_layout(
-                    barmode='stack', paper_bgcolor='white', plot_bgcolor='white', 
+                    barmode='stack', 
+                    paper_bgcolor='white', 
+                    plot_bgcolor='white', 
                     yaxis=dict(showgrid=False, zeroline=False, showticklabels=False, fixedrange=True, range=[0, df_plot['Faturamento'].max() * 2.2]), 
                     yaxis2=dict(showgrid=False, zeroline=False, showticklabels=False, fixedrange=True, range=[df_plot['Quantidade'].max() * -1.5, df_plot['Quantidade'].max() * 1.2]),
                     xaxis=dict(title="Competência / Dias", showgrid=False, showline=True, linecolor='black', tickfont=dict(color='black', size=13)), 
                     legend=dict(orientation="h", yanchor="bottom", y=1.1, xanchor="center", x=0.5, font=dict(color="black", size=14)), 
-                    margin=dict(l=10, r=10, t=80, b=60), hovermode='x unified'
+                    margin=dict(l=10, r=10, t=80, b=60), 
+                    hovermode='x unified'
                 )
                 st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
                 st.markdown('</div>', unsafe_allow_html=True)
 
-            # Métricas
+# --- CÁLCULO MÉTRICAS MÊS ATUAL ---
+            hoje = datetime.utcnow() - timedelta(hours=3)
+            inicio_mes = hoje.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+            df_mes_atual = df_vendas[df_vendas['Data'] >= inicio_mes]
+
+            # --- SEÇÃO DE MÉTRICAS ---
+            st.divider()
+            
+            # Linha 1: Totais Gerais
+            st.markdown("### 📊 Totais Acumulados")
             c1, c2, c3 = st.columns(3)
             c1.metric("Faturamento Total", f"R$ {df_vendas['Faturamento'].sum():.2f}")
-            c2.metric("Lucro Líquido", f"R$ {df_vendas['Lucro Total'].sum():.2f}")
-            c3.metric("Itens Vendidos", int(df_vendas['Quantidade'].sum()))
+            c2.metric("Lucro Líquido Geral", f"R$ {df_vendas['Lucro Total'].sum():.2f}")
+            c3.metric("Total Itens Vendidos", int(df_vendas['Quantidade'].sum()))
+
+            # Linha 2: Performance do Mês Atual
+            st.markdown("### 📅 Performance do Mês Atual")
+            m1, m2, m3 = st.columns(3)
+            
+            fat_mes = df_mes_atual['Faturamento'].sum()
+            lucro_mes = df_mes_atual['Lucro Total'].sum()
+            qtd_mes = int(df_mes_atual['Quantidade'].sum())
+
+            m1.metric("Faturamento Mensal", f"R$ {fat_mes:,.2f}")
+            m2.metric("Lucro Mensal", f"R$ {lucro_mes:,.2f}")
+            m3.metric("Vendas no Mês", qtd_mes)
 
             # --- ABAIXO DAS MÉTRICAS (c1, c2, c3) E ANTES DO HISTÓRICO ---
 
@@ -848,15 +936,37 @@ elif st.session_state.pg == "Dashboard":
 
             st.plotly_chart(fig_pizza, use_container_width=True, config={'displayModeBar': False})
             
+# --- SEÇÃO DO HISTÓRICO COM SCROLL ---
             st.divider()
             st.subheader("📋 Histórico de Vendas")
-            st.markdown("""<div style="display: flex; font-weight: bold; background-color: #f8f9fa; padding: 10px 15px; border: 1px solid #e6e6e6; border-radius: 10px 10px 0 0;"><div style="flex: 3;">Produto</div><div style="flex: 2;">SKU</div><div style="flex: 1;">Qtd</div><div style="flex: 2;">Data</div><div style="flex: 2;">Lucro</div><div style="flex: 1;">Ação</div></div>""", unsafe_allow_html=True)
-            for idx, row in df_vendas.iterrows():
-                cols = st.columns([3, 2, 1, 2, 2, 1])
-                cols[0].write(row['Produto']); cols[1].write(f"`{row['SKU']}`"); cols[2].write(str(int(row['Quantidade']))); cols[3].write(row['Data'].strftime('%d/%m/%Y')); cols[4].write(f"R$ {row['Lucro Total']:.2f}")
-                if cols[5].button("❌", key=f"del_{idx}"):
-                    client_bq.query(f"DELETE FROM `leandro-marketplace.DL_Store_Online.tb_vendas_realizadas` WHERE sku = '{row['SKU']}' AND data = '{row['Data'].strftime('%Y-%m-%d')}' AND lucro_total = {row['Lucro Total']}").result()
-                    st.cache_data.clear(); st.rerun()
+            
+            # Cabeçalho Fixo (fora do scroll)
+            st.markdown("""
+                <div style="display: flex; font-weight: bold; background-color: #f8f9fa; padding: 10px 15px; border: 1px solid #e6e6e6; border-radius: 10px 10px 0 0;">
+                    <div style="flex: 3;">Produto</div>
+                    <div style="flex: 2;">SKU</div>
+                    <div style="flex: 1;">Qtd</div>
+                    <div style="flex: 2;">Data</div>
+                    <div style="flex: 2;">Lucro</div>
+                    <div style="flex: 1;">Ação</div>
+                </div>
+            """, unsafe_allow_html=True)
+            
+            # Container com Scroll (altura de 500px, você pode ajustar)
+            with st.container(height=500):
+                for idx, row in df_vendas.iterrows():
+                    cols = st.columns([3, 2, 1, 2, 2, 1])
+                    cols[0].write(row['Produto'])
+                    cols[1].write(f"`{row['SKU']}`")
+                    cols[2].write(str(int(row['Quantidade'])))
+                    cols[3].write(row['Data'].strftime('%d/%m/%Y'))
+                    cols[4].write(f"R$ {row['Lucro Total']:.2f}")
+                    
+                    if cols[5].button("❌", key=f"del_{idx}"):
+                        client_bq.query(f"DELETE FROM `leandro-marketplace.DL_Store_Online.tb_vendas_realizadas` WHERE sku = '{row['SKU']}' AND data = '{row['Data'].strftime('%Y-%m-%d')}' AND lucro_total = {row['Lucro Total']}").result()
+                        st.cache_data.clear()
+                        st.rerun()
+            
         else:
             st.info("Nenhuma venda registrada ainda.")
     except Exception as e:
