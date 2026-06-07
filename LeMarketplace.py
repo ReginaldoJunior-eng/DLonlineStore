@@ -14,6 +14,7 @@ from google.oauth2 import service_account
 import plotly.graph_objects as go
 
 # --- CONFIGURAÇÕES DE INICIALIZAÇÃO ---
+
 if 'processando_venda' not in st.session_state:
     st.session_state.processando_venda = False
 
@@ -22,6 +23,10 @@ if 'pg' not in st.session_state:
 
 if 'logado' not in st.session_state: 
     st.session_state.logado = False
+
+# Garante que a variável do painel financeiro comece falsa caso não exista
+if 'fin_acesso' not in st.session_state:
+    st.session_state.fin_acesso = False
 
 # --- CONFIGURAÇÕES DE PÁGINA ---
 st.set_page_config(
@@ -139,10 +144,12 @@ def buscar_anotacoes_bq():
 
 def inserir_anotacao_bq(texto):
     if client_bq:
+        # Escapa aspas simples para evitar quebras na query SQL
+        texto_seguro = str(texto).replace("'", "''")
         id_nota = str(uuid.uuid4())
         query = f"""
             INSERT INTO `leandro-marketplace.DL_Store_Online.tb_anotacoes` (id, anotacao, status_concluido, data_criacao)
-            VALUES ('{id_nota}', '{texto}', false, CURRENT_TIMESTAMP())
+            VALUES ('{id_nota}', '{texto_seguro}', false, CURRENT_TIMESTAMP())
         """
         client_bq.query(query).result()
 
@@ -170,13 +177,27 @@ if st.session_state.logado and client_bq:
 
 # --- FUNÇÕES DE CÁLCULO ---
 def converter_custo_seguro(valor_raw):
-    if valor_raw is None or valor_raw == "": return 0.0
+    if valor_raw is None or valor_raw == "": 
+        return 0.0
+    
+    # Se já for um número (float ou int), retorna direto
+    if isinstance(valor_raw, (int, float)):
+        return float(valor_raw)
+        
     s = str(valor_raw).replace('R$', '').replace(' ', '').strip()
     try:
-        if ',' in s and '.' in s: s = s.replace('.', '').replace(',', '.')
-        elif ',' in s: s = s.replace(',', '.')
+        # Se tem ponto e vírgula (ex: 1.250,45), remove o ponto (milhar) e troca a vírgula por ponto (decimal)
+        if ',' in s and '.' in s:
+            # Identifica se o ponto vem antes da vírgula (padrão BR)
+            if s.find('.') < s.find(','):
+                s = s.replace('.', '').replace(',', '.')
+            else:
+                s = s.replace(',', '')
+        elif ',' in s:
+            s = s.replace(',', '.')
         return float(s)
-    except: return 0.0
+    except: 
+        return 0.0
 
 def calcular_venda_completo(custo_aquisicao, margem_percentual, mkt):
     imposto_tax = 0.06
