@@ -237,12 +237,24 @@ def calcular_venda_completo(custo_aquisicao, margem_percentual, mkt):
 with st.sidebar:
     st.image("https://cdn-icons-png.flaticon.com/512/3081/3081559.png", width=80)
     st.title("D.L Online Store")
-    if st.button("🏠 Início"): st.session_state.pg = "Início"
-    if st.button("👥 Quem Somos"): st.session_state.pg = "Quem Somos"
-    if st.button("🛠️ Serviços"): st.session_state.pg = "Serviços"
-    if st.button("✉️ Contato"): st.session_state.pg = "Contato"
+    
+    # Navegação Pública com st.rerun() para garantir fluidez
+    if st.button("🏠 Início"): 
+        st.session_state.pg = "Início"
+        st.rerun()
+    if st.button("👥 Quem Somos"): 
+        st.session_state.pg = "Quem Somos"
+        st.rerun()
+    if st.button("🛠️ Serviços"): 
+        st.session_state.pg = "Serviços"
+        st.rerun()
+    if st.button("✉️ Contato"): 
+        st.session_state.pg = "Contato"
+        st.rerun()
+        
     st.divider()
     
+    # --- FLUXO DE LOGIN / PAINEL PRIVADO ---
     if not st.session_state.logado:
         st.subheader("🔐 Área do Vendedor")
         u = st.text_input("Usuário")
@@ -252,25 +264,92 @@ with st.sidebar:
                 st.session_state.logado = True
                 st.session_state.pg = "Calculadora" 
                 st.rerun()
-            else: st.error("Usuário ou senha incorretos.")
+            else: 
+                st.error("Usuário ou senha incorretos.")
     else:
         st.subheader(f"👋 Olá, Leandro")
-        if st.button("✅ Pendências"): st.session_state.pg = "Pendencias"
-        if st.button("📊 Comparativo de Preços"): st.session_state.pg = "Calculadora"
-        if st.button("📝 Novo Item na Base"): st.session_state.pg = "Cadastro"
-        if st.button("💰 Alterar Preços"): st.session_state.pg = "Alterar Preco"
-        if st.button("📈 Análise de Vendas"): st.session_state.pg = "Análise de Vendas"
-        if st.button("📦 Gestão de Estoque"): st.session_state.pg = "Gestão de Estoque"
         
-        # Alteração feita aqui: resetamos fin_acesso ao clicar
+        # Botões de navegação interna
+        if st.button("✅ Pendências"): 
+            st.session_state.pg = "Pendencias"
+            st.rerun()
+        if st.button("📊 Comparativo de Preços"): 
+            st.session_state.pg = "Calculadora"
+            st.rerun()
+        if st.button("📝 Novo Item na Base"): 
+            st.session_state.pg = "Cadastro"
+            st.rerun()
+        if st.button("💰 Alterar Preços"): 
+            st.session_state.pg = "Alterar Preco"
+            st.rerun()
+        if st.button("📈 Análise de Vendas"): 
+            st.session_state.pg = "Análise de Vendas"
+            st.rerun()
+        if st.button("📦 Gestão de Estoque"): 
+            st.session_state.pg = "Gestão de Estoque"
+            st.rerun()
+            
         if st.button("📉 Dashboard Financeiro"): 
             st.session_state.fin_acesso = False
             st.session_state.pg = "Dashboard"
             st.rerun()
             
+        # ------------------------------------------------------------
+        # GAVETA INTERATIVA DE PENDÊNCIAS (CONSULTA, ADIÇÃO E EXCLUSÃO)
+        # ------------------------------------------------------------
+        st.write("") 
+        with st.sidebar.expander("📋 Bloco de Notas & Pendências", expanded=False):
+            # 1. ESCREVER / ADICIONAR NOVA NOTA
+            nova_nota_sb = st.text_input("Escreva uma nova nota:", key="input_nova_nota_sidebar")
+            if st.button("📌 Adicionar Nota", use_container_width=True):
+                if nova_nota_sb.strip() != "":
+                    try:
+                        inserir_anotacao_bq(nova_nota_sb)
+                        st.toast("Nota adicionada com sucesso! 📌")
+                        st.cache_data.clear()  # Limpa o cache para forçar o recarregamento do BigQuery
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Erro ao salvar: {e}")
+                else:
+                    st.warning("Digite algo antes de salvar.")
+            
+            st.divider()
+            st.caption("Pendências Ativas (Marque para tirar/concluir):")
+            
+            # 2. LISTAR E EXCLUIR/CONCLUIR NOTAS EXISTENTES
+            try:
+                # Busca as anotações diretamente da sua função do BigQuery
+                df_apoio = buscar_anotacoes_bq()
+                if not df_apoio.empty:
+                    # Filtra trazendo apenas as que NÃO estão concluídas
+                    df_ativas = df_apoio[df_apoio['status_concluido'] == False]
+                    
+                    if not df_ativas.empty:
+                        for idx, row in df_ativas.iterrows():
+                            # Cria o checkbox com ID único para a sidebar evitando conflito com a aba principal
+                            if st.checkbox(row['anotacao'], key=f"sb_chk_{row['id']}"):
+                                try:
+                                    # Altera o status no BigQuery para True (Concluído/Tirar da lista)
+                                    atualizar_status_bq(row['id'], True)
+                                    st.toast("Pendência concluída! 🎉")
+                                    st.cache_data.clear()  # Limpa o cache do BQ
+                                    st.rerun()
+                                except Exception as e_up:
+                                    st.error(f"Erro ao atualizar status: {e_up}")
+                    else:
+                        st.info("Nenhuma nota ativa por aqui.")
+                else:
+                    st.info("Nenhuma nota criada ainda.")
+            except Exception as e:
+                st.caption(f"Sem conexão com as notas: {e}")
+        # ------------------------------------------------------------
+        
+        # --- BOTÃO DE LOGOUT ---
         st.write("")
         if st.button("🚪 Sair"):
             st.session_state.logado = False
+            st.session_state.fin_acesso = False
+            st.session_state.pg = "Início"
             st.rerun()
 
 # --- LÓGICA DE PÁGINAS ---
