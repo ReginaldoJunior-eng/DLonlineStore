@@ -230,6 +230,12 @@ def calcular_venda_completo(custo_aquisicao, margem_percentual, mkt):
         preco = (custo_aquisicao + custo_embalagem) / divisor if divisor > 0 else 0
         lucro = preco - (preco * imposto_tax) - custo_aquisicao - custo_embalagem
         return preco, lucro
+    elif mkt == "tiktok":
+        comissao_mkt, taxa_fixa = 0.22, 4.0
+        divisor = 1 - (comissao_mkt + imposto_tax + margem_alvo)
+        preco = (custo_aquisicao + custo_embalagem + taxa_fixa) / divisor if divisor > 0 else 0
+        lucro = preco - (preco * comissao_mkt) - (preco * imposto_tax) - custo_aquisicao - custo_embalagem - taxa_fixa
+        return preco, lucro
     return 0, 0
 
 # --- SIDEBAR ---
@@ -473,13 +479,14 @@ elif st.session_state.pg == "Calculadora":
             p_shein, l_shein = calcular_venda_completo(cust_aq, margem_input, "shein")
             p_shopee, l_shopee = calcular_venda_completo(cust_aq, margem_input, "shopee")
             p_temu, l_temu = calcular_venda_completo(cust_aq, margem_input, "temu")
+            p_tiktok, l_tiktok = calcular_venda_completo(cust_aq, margem_input, "tiktok")
             
             st.divider()
             st.metric("Custo de Aquisição Base", f"R$ {cust_aq:.2f}")
             res = {
-                "Canal": ["SHEIN", "SHOPEE", "TEMU"], 
-                "Preço Sugerido": [f"R$ {p_shein:.2f}", f"R$ {p_shopee:.2f}", f"R$ {p_temu:.2f}"], 
-                "Lucro Líquido Real": [f"R$ {l_shein:.2f}", f"R$ {l_shopee:.2f}", f"R$ {l_temu:.2f}"]
+                "Canal": ["SHEIN", "SHOPEE", "TEMU", "TIKTOK"], 
+                "Preço Sugerido": [f"R$ {p_shein:.2f}", f"R$ {p_shopee:.2f}", f"R$ {p_temu:.2f}", f"R$ {p_tiktok:.2f}"], 
+                "Lucro Líquido Real": [f"R$ {l_shein:.2f}", f"R$ {l_shopee:.2f}", f"R$ {l_temu:.2f}", f"R$ {l_tiktok:.2f}"]
             }
             st.table(pd.DataFrame(res))
 
@@ -496,7 +503,8 @@ elif st.session_state.pg == "Análise de Vendas":
             _, l1 = calcular_venda_completo(r['Custo_num'], m_alvo, "shein")
             _, l2 = calcular_venda_completo(r['Custo_num'], m_alvo, "shopee")
             _, l3 = calcular_venda_completo(r['Custo_num'], m_alvo, "temu")
-            max_l = max(l1, l2, l3)
+            _, l4 = calcular_venda_completo(r['Custo_num'], m_alvo, "tiktok")
+            max_l = max(l1, l2, l3, l4)
             rank_data.append({"Produto": r['Produto'], "SKU": r['SKU'], "Lucro Estimado": round(max_l, 2)})
         
         df_rank = pd.DataFrame(rank_data).sort_values(by="Lucro Estimado", ascending=False)
@@ -535,7 +543,7 @@ elif st.session_state.pg == "Cadastro":
             st.rerun()
 
     # --- CAMPOS PRINCIPAIS ---
-    m = st.selectbox("Marketplace", ["shein", "shopee", "temu", "todos"])
+    m = st.selectbox("Marketplace", ["shein", "shopee", "temu", "tiktok", "todos"])
     n = st.text_input("Nome Base do Produto")
     s_base = st.text_input("SKU Base")
     
@@ -607,7 +615,7 @@ elif st.session_state.pg == "Cadastro":
         else:
             try:
                 table_id_produtos = "leandro-marketplace.DL_Store_Online.tb_produtos"
-                mkt_list = ["shein", "shopee", "temu"] if m == "todos" else [m]
+                mkt_list = ["shein", "shopee", "temu", "tiktok"] if m == "todos" else [m]
                 
                 lote_bq = []
                 for aba in mkt_list:
@@ -793,13 +801,14 @@ elif st.session_state.pg == "Dashboard":
                 
                 c_v1, c_v2, c_v3 = st.columns(3)
                 with c_v1:
-                    mkt_venda = st.selectbox("Canal de Venda", ["shein", "shopee", "temu"])
+                    mkt_venda = st.selectbox("Canal de Venda", ["shein", "shopee", "temu", "tiktok"])
                     v_qtd = st.number_input("Qtd Vendida", min_value=1, value=1)
                 with c_v2:
                     v_preco_venda = st.number_input("Preço de Venda Praticado (R$)", min_value=0.0, step=0.01, value=0.0)
                     imp, c_fixo = 0.06, 1.00
                     if mkt_venda == "shein": com, tax = 0.18, 5.0
                     elif mkt_venda == "shopee": com, tax = 0.20, (4.0 if v_custo_base < 50 else 20.0)
+                    elif mkt_venda == "tiktok": com, tax = 0.22, 4.0
                     else: com, tax = 0.0, 0.0
                     lucro_un_calc = v_preco_venda - (v_preco_venda * com) - (v_preco_venda * imp) - v_custo_base - c_fixo - tax
                     v_margem_auto = (lucro_un_calc / v_preco_venda * 100) if v_preco_venda > 0 else 0.0
@@ -1004,7 +1013,7 @@ elif st.session_state.pg == "Dashboard":
             df_pizza = df_vendas.groupby('Marketplace')['Lucro Total'].sum().reset_index()
 
             # Cores personalizadas
-            cores_map = {'shein': '#FFD700', 'shopee': '#EE4D2D', 'temu': '#FF8C00'}
+            cores_map = {'shein': '#FFD700', 'shopee': '#EE4D2D', 'temu': '#FF8C00', 'tiktok': '#000000'}
             cores_lista = [cores_map.get(m, '#333333') for m in df_pizza['Marketplace']]
 
             fig_pizza = go.Figure(data=[go.Pie(
@@ -1171,7 +1180,8 @@ elif st.session_state.pg == "Gestão de Estoque":
                 tax_shopee = 4.0 if custo < 50 else 20.0
                 l_shopee = p_sugerido - (p_sugerido * 0.20) - (p_sugerido * imp) - custo - c_fixo - tax_shopee
                 l_temu = p_sugerido - (p_sugerido * imp) - custo - c_fixo
-                lucros = {"Shein": l_shein, "Shopee": l_shopee, "Temu": l_temu}
+                l_tiktok = p_sugerido - (p_sugerido * 0.22) - (p_sugerido * imp) - custo - c_fixo - 4.0
+                lucros = {"Shein": l_shein, "Shopee": l_shopee, "Temu": l_temu, "Tiktok": l_tiktok}
                 melhor_canal = max(lucros, key=lucros.get)
                 return melhor_canal, lucros[melhor_canal]
 
