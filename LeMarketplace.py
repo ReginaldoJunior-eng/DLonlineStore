@@ -36,79 +36,191 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# --- ESTILIZAÇÃO CUSTOMIZADA ---
+# --- ESTILIZAÇÃO CUSTOMIZADA (DESIGN PROFISSIONAL) ---
 st.markdown("""
     <style>
-    .stApp { background-color: white !important; }
-    [data-testid="stSidebar"] { background-color: #f8f9fa !important; border-right: 1px solid #e6e6e6; }
-    h1, h2, h3, p, span, label, .stMarkdown { color: #31333F !important; }
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Playfair+Display:wght@600;700&display=swap');
+    
+    * {
+        font-family: 'Inter', sans-serif !important;
+    }
+    
+    .stApp { 
+        background: linear-gradient(135deg, #ffffff 0%, #f8f9fc 100%) !important; 
+    }
+    
+    [data-testid="stSidebar"] { 
+        background: linear-gradient(180deg, #1a1f3a 0%, #0d1225 100%) !important; 
+        border-right: none;
+    }
+    
+    h1, h2, h3 { 
+        font-family: 'Playfair Display', serif !important;
+        color: #1a1f3a !important;
+        font-weight: 700 !important;
+    }
+    
+    p, span, label, .stMarkdown { 
+        color: #2d3748 !important;
+        font-weight: 400;
+    }
     
     .stTable, [data-testid="stTable"] {
-        border: 1px solid #f0f0f0 !important;
-        border-radius: 10px !important;
+        border: 1px solid #e2e8f0 !important;
+        border-radius: 12px !important;
         overflow: hidden !important;
     }
 
     .plot-container {
-        border: 1px solid #e6e6e6 !important; 
-        border-radius: 12px !important;
-        padding: 15px !important;
-        background-color: #ffffff !important;
-        box-shadow: 0px 2px 4px rgba(0,0,0,0.05);
+        border: 1px solid #e2e8f0 !important; 
+        border-radius: 16px !important;
+        padding: 20px !important;
+        background: linear-gradient(135deg, #ffffff 0%, #f7fafc 100%) !important;
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.07);
     }
 
     .historico-scroll-container {
-        border: 1px solid #e6e6e6 !important;
-        border-radius: 10px !important;
+        border: 1px solid #e2e8f0 !important;
+        border-radius: 12px !important;
         max-height: 800px !important;
         overflow-y: auto !important;
-        background-color: white;
+        background: white;
     }
     
     .linha-historico {
-        padding: 8px 15px;
-        border-bottom: 1px solid #f0f0f0;
-        transition: background-color 0.2s;
+        padding: 12px 16px;
+        border-bottom: 1px solid #f0f4f8;
+        transition: all 0.3s ease;
         display: flex;
         align-items: center;
+        background: white;
     }
     
-    .linha-historico:nth-child(odd) { background-color: #ffffff; }
-    .linha-historico:nth-child(even) { background-color: #f9f9f9; }
-    .linha-historico:hover { background-color: #FFF9E6 !important; }
+    .linha-historico:nth-child(odd) { background: #fafbfc; }
+    .linha-historico:hover { 
+        background: #f0f4f8 !important;
+        border-left: 4px solid #fbbf24;
+    }
 
     section[data-testid="stSidebar"] .stButton button {
         width: 100% !important;
         border-radius: 10px !important;
-        height: 3.5em !important;
-        min-height: 3.5em !important;
-        background-color: #ffffff !important;
-        color: #31333F !important;
-        border: 1px solid #e6e6e6 !important;
+        height: 3.2em !important;
+        background-color: transparent !important;
+        color: #e0e7ff !important;
+        border: 1px solid rgba(224, 231, 255, 0.2) !important;
         text-align: left !important;
-        padding-left: 20px !important;
-        margin-bottom: 2px !important;
+        padding-left: 18px !important;
+        margin-bottom: 6px !important;
         display: block !important;
+        font-weight: 500;
+        transition: all 0.3s ease !important;
     }
     
-    section[data-testid="stSidebar"] .stButton p { font-size: 14px !important; white-space: nowrap !important; }
+    section[data-testid="stSidebar"] .stButton p { 
+        font-size: 14px !important; 
+        white-space: nowrap !important;
+        color: #e0e7ff !important;
+    }
 
     section[data-testid="stSidebar"] .stButton button:hover { 
-        background-color: #FFF9E6 !important; 
-        border: 1px solid #FFD700 !important; 
-        color: #CC9900 !important; 
+        background-color: rgba(251, 191, 36, 0.15) !important; 
+        border: 1px solid #fbbf24 !important; 
+        color: #fbbf24 !important; 
     }
     
     section[data-testid="stSidebar"] .stButton button[type="primary"] {
-        background-color: #FFD700 !important; 
-        color: black !important; 
+        background: linear-gradient(135deg, #fbbf24 0%, #f59e0b 100%) !important; 
+        color: #1a1f3a !important; 
         border: none !important; 
         text-align: center !important; 
-        font-weight: bold !important;
+        font-weight: 600 !important;
         padding-left: 0px !important;
     }
 
-    [data-testid="stImage"] img { height: auto; object-fit: contain; width: 100%; }
+    section[data-testid="stSidebar"] .stButton button[type="primary"]:hover {
+        box-shadow: 0 8px 16px rgba(251, 191, 36, 0.3) !important;
+        transform: translateY(-2px) !important;
+    }
+
+    section[data-testid="stSidebar"] h1, 
+    section[data-testid="stSidebar"] h2,
+    section[data-testid="stSidebar"] h3 {
+        color: #fbbf24 !important;
+        font-family: 'Inter', sans-serif !important;
+    }
+
+    section[data-testid="stSidebar"] .stSelectbox,
+    section[data-testid="stSidebar"] .stTextInput {
+        margin-bottom: 12px !important;
+    }
+
+    [data-testid="stImage"] img { 
+        height: auto; 
+        object-fit: contain; 
+        width: 100%;
+        border-radius: 8px;
+    }
+
+    section[data-testid="stSidebar"] [data-testid="stExpander"] {
+        background: transparent !important;
+        border: 1px solid rgba(251, 191, 36, 0.2) !important;
+    }
+
+    section[data-testid="stSidebar"] [data-testid="stExpander"] button {
+        color: #e0e7ff !important;
+        font-weight: 600 !important;
+    }
+
+    section[data-testid="stSidebar"] [data-testid="stExpander"] button:hover {
+        color: #fbbf24 !important;
+        background: rgba(251, 191, 36, 0.1) !important;
+    }
+
+    section[data-testid="stSidebar"] [data-testid="stExpanderDetails"] {
+        background: rgba(15, 18, 37, 0.8) !important;
+        border: 1px solid rgba(251, 191, 36, 0.2) !important;
+        border-top: none;
+    }
+
+    .metric-card {
+        background: linear-gradient(135deg, #ffffff 0%, #f7fafc 100%) !important;
+        border: 1px solid #e2e8f0 !important;
+        border-radius: 12px !important;
+        padding: 20px !important;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05) !important;
+        transition: all 0.3s ease !important;
+    }
+
+    .metric-card:hover {
+        box-shadow: 0 8px 16px rgba(0, 0, 0, 0.1) !important;
+        transform: translateY(-2px) !important;
+    }
+
+    .section-header {
+        border-bottom: 3px solid #fbbf24;
+        padding-bottom: 12px;
+        margin-bottom: 20px;
+    }
+
+    [data-testid="stMetric"] {
+        background: linear-gradient(135deg, #ffffff 0%, #f7fafc 100%) !important;
+        border: 1px solid #e2e8f0 !important;
+        border-radius: 12px !important;
+        padding: 16px !important;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05) !important;
+    }
+
+    [data-testid="stExpander"] {
+        border: 1px solid #e2e8f0 !important;
+        border-radius: 12px !important;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05) !important;
+    }
+
+    .divider {
+        border-bottom: 2px solid #e2e8f0;
+        margin: 24px 0;
+    }
     </style>
     """, unsafe_allow_html=True)
 
@@ -144,7 +256,6 @@ def buscar_anotacoes_bq():
 
 def inserir_anotacao_bq(texto):
     if client_bq:
-        # Escapa aspas simples para evitar quebras na query SQL
         texto_seguro = str(texto).replace("'", "''")
         id_nota = str(uuid.uuid4())
         query = f"""
@@ -164,7 +275,7 @@ def excluir_anotacao_bq(id_nota):
         query = f"DELETE FROM `leandro-marketplace.DL_Store_Online.tb_anotacoes` WHERE id = '{id_nota}'"
         client_bq.query(query).result()
 
-# --- INICIALIZAÇÃO DA BASE DE DADOS (ESSENCIAL PARA EVITAR NAMERROR) ---
+# --- INICIALIZAÇÃO DA BASE DE DADOS ---
 df_base_completa = pd.DataFrame()
 
 if st.session_state.logado and client_bq:
@@ -180,15 +291,12 @@ def converter_custo_seguro(valor_raw):
     if valor_raw is None or valor_raw == "": 
         return 0.0
     
-    # Se já for um número (float ou int), retorna direto
     if isinstance(valor_raw, (int, float)):
         return float(valor_raw)
         
     s = str(valor_raw).replace('R$', '').replace(' ', '').strip()
     try:
-        # Se tem ponto e vírgula (ex: 1.250,45), remove o ponto (milhar) e troca a vírgula por ponto (decimal)
         if ',' in s and '.' in s:
-            # Identifica se o ponto vem antes da vírgula (padrão BR)
             if s.find('.') < s.find(','):
                 s = s.replace('.', '').replace(',', '.')
             else:
@@ -238,13 +346,19 @@ def calcular_venda_completo(custo_aquisicao, margem_percentual, mkt):
         return preco, lucro
     return 0, 0
 
-# --- SIDEBAR ---
-# --- SIDEBAR ---
+# --- SIDEBAR PROFISSIONAL ---
 with st.sidebar:
-    st.image("https://cdn-icons-png.flaticon.com/512/3081/3081559.png", width=80)
-    st.title("D.L Online Store")
+    st.markdown("""
+        <div style="text-align: center; padding: 20px 0;">
+            <h2 style="margin: 0; font-size: 24px; color: #fbbf24;">D.L Online Store</h2>
+            <p style="margin: 4px 0 0 0; color: #9ca3af; font-size: 12px; letter-spacing: 1px;">MARKETPLACE MANAGER</p>
+        </div>
+    """, unsafe_allow_html=True)
     
-    # Navegação Pública com st.rerun() para garantir fluidez
+    st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
+    
+    # Navegação Pública
+    st.markdown('<p style="color: #9ca3af; font-size: 12px; font-weight: 600; text-transform: uppercase; margin-bottom: 12px;">Público</p>', unsafe_allow_html=True)
     if st.button("🏠 Início"): 
         st.session_state.pg = "Início"
         st.rerun()
@@ -258,14 +372,14 @@ with st.sidebar:
         st.session_state.pg = "Contato"
         st.rerun()
         
-    st.divider()
+    st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
     
-    # --- FLUXO DE LOGIN / PAINEL PRIVADO ---
+    # --- FLUXO DE LOGIN ---
     if not st.session_state.logado:
-        st.subheader("🔐 Área do Vendedor")
-        u = st.text_input("Usuário")
-        p = st.text_input("Senha", type="password")
-        if st.button("Entrar no Painel", type="primary"):
+        st.markdown('<p style="color: #fbbf24; font-size: 14px; font-weight: 600; margin-bottom: 16px;">🔐 Área do Vendedor</p>', unsafe_allow_html=True)
+        u = st.text_input("Usuário", label_visibility="collapsed", placeholder="Usuário")
+        p = st.text_input("Senha", type="password", label_visibility="collapsed", placeholder="Senha")
+        if st.button("Entrar no Painel", type="primary", use_container_width=True):
             if u == "leandro" and p == "123":
                 st.session_state.logado = True
                 st.session_state.pg = "Calculadora" 
@@ -273,9 +387,9 @@ with st.sidebar:
             else: 
                 st.error("Usuário ou senha incorretos.")
     else:
-        st.subheader(f"👋 Olá, Leandro")
+        st.markdown(f'<p style="color: #fbbf24; font-size: 14px; font-weight: 600; margin-bottom: 16px;">👋 Bem-vindo, Leandro</p>', unsafe_allow_html=True)
         
-        # Botões de navegação interna
+        st.markdown('<p style="color: #9ca3af; font-size: 12px; font-weight: 600; text-transform: uppercase; margin-bottom: 12px; margin-top: 20px;">Operações</p>', unsafe_allow_html=True)
         if st.button("✅ Pendências"): 
             st.session_state.pg = "Pendencias"
             st.rerun()
@@ -300,59 +414,50 @@ with st.sidebar:
             st.session_state.pg = "Dashboard"
             st.rerun()
             
-        # ------------------------------------------------------------
-        # GAVETA INTERATIVA DE PENDÊNCIAS (CONSULTA, ADIÇÃO E EXCLUSÃO)
-        # ------------------------------------------------------------
-        st.write("") 
-        with st.sidebar.expander("📋 Bloco de Notas & Pendências", expanded=False):
-            # 1. ESCREVER / ADICIONAR NOVA NOTA
-            nova_nota_sb = st.text_input("Escreva uma nova nota:", key="input_nova_nota_sidebar")
+        # --- BLOCO DE NOTAS ---
+        st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
+        st.markdown('<p style="color: #9ca3af; font-size: 12px; font-weight: 600; text-transform: uppercase; margin-bottom: 12px;">Produtividade</p>', unsafe_allow_html=True)
+        with st.expander("📋 Bloco de Notas & Pendências", expanded=False):
+            nova_nota_sb = st.text_input("Escreva uma nova nota:", key="input_nova_nota_sidebar", placeholder="Digite...")
             if st.button("📌 Adicionar Nota", use_container_width=True):
                 if nova_nota_sb.strip() != "":
                     try:
                         inserir_anotacao_bq(nova_nota_sb)
                         st.toast("Nota adicionada com sucesso! 📌")
-                        st.cache_data.clear()  # Limpa o cache para forçar o recarregamento do BigQuery
+                        st.cache_data.clear()
                         st.rerun()
                     except Exception as e:
                         st.error(f"Erro ao salvar: {e}")
                 else:
                     st.warning("Digite algo antes de salvar.")
             
-            st.divider()
-            st.caption("Pendências Ativas (Marque para tirar/concluir):")
+            st.markdown('<p style="color: #9ca3af; font-size: 11px; margin: 12px 0 8px 0;">Pendências Ativas</p>', unsafe_allow_html=True)
             
-            # 2. LISTAR E EXCLUIR/CONCLUIR NOTAS EXISTENTES
             try:
-                # Busca as anotações diretamente da sua função do BigQuery
                 df_apoio = buscar_anotacoes_bq()
                 if not df_apoio.empty:
-                    # Filtra trazendo apenas as que NÃO estão concluídas
                     df_ativas = df_apoio[df_apoio['status_concluido'] == False]
                     
                     if not df_ativas.empty:
                         for idx, row in df_ativas.iterrows():
-                            # Cria o checkbox com ID único para a sidebar evitando conflito com a aba principal
                             if st.checkbox(row['anotacao'], key=f"sb_chk_{row['id']}"):
                                 try:
-                                    # Altera o status no BigQuery para True (Concluído/Tirar da lista)
                                     atualizar_status_bq(row['id'], True)
                                     st.toast("Pendência concluída! 🎉")
-                                    st.cache_data.clear()  # Limpa o cache do BQ
+                                    st.cache_data.clear()
                                     st.rerun()
                                 except Exception as e_up:
-                                    st.error(f"Erro ao atualizar status: {e_up}")
+                                    st.error(f"Erro ao atualizar: {e_up}")
                     else:
-                        st.info("Nenhuma nota ativa por aqui.")
+                        st.info("Nenhuma nota ativa.")
                 else:
-                    st.info("Nenhuma nota criada ainda.")
+                    st.info("Nenhuma nota criada.")
             except Exception as e:
-                st.caption(f"Sem conexão com as notas: {e}")
-        # ------------------------------------------------------------
+                st.caption(f"Erro ao conectar: {e}")
         
-        # --- BOTÃO DE LOGOUT ---
-        st.write("")
-        if st.button("🚪 Sair"):
+        # --- LOGOUT ---
+        st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
+        if st.button("🚪 Sair", use_container_width=True):
             st.session_state.logado = False
             st.session_state.fin_acesso = False
             st.session_state.pg = "Início"
@@ -370,37 +475,45 @@ if st.session_state.pg == "Início":
     else:
         st.image("https://images.unsplash.com/photo-1556742049-0cfed4f6a45d?auto=format&fit=crop&w=1000&q=80", use_container_width=True)
     
-    st.markdown("<h1 style='text-align: center;'>Bem-vindo à D.L Online Store</h1>", unsafe_allow_html=True)
+    st.markdown("""
+    <h1 style="text-align: center; font-size: 42px; margin-bottom: 8px;">Bem-vindo à D.L Online Store</h1>
+    <p style="text-align: center; color: #6b7280; font-size: 16px; margin-bottom: 40px;">Sua Experiência de Compra Inteligente</p>
+    """, unsafe_allow_html=True)
+    
     col_a, col_b, col_c = st.columns([1,3,1])
     with col_b:
         st.markdown("""
-        ### Sua Experiência de Compra Inteligente
+        ### Na D.L Online Store
         
-        Na **D.L Online Store**, nossa missão vai além de vender produtos. Estamos focados em conectar você às melhores oportunidades dos maiores marketplaces do mundo, garantindo uma curadoria de qualidade e preços competitivos.
+        Nossa missão vai além de vender produtos. Estamos focados em conectar você às melhores oportunidades dos maiores marketplaces do mundo, garantindo uma curadoria de qualidade e preços competitivos.
         
-        #### Nosso Maior Compromisso: Você.
+        #### Nosso Maior Compromisso: Você
         
         Acreditamos que a verdadeira venda só termina quando você está satisfeito. Por isso, fundamentamos nossa operação em:
         
-        1.  🌟 **Satisfação Garantida:** Trabalhamos incansavelmente para que sua experiência seja perfeita.
-        2.  🛡️ **Qualidade e Confiança:** Selecionamos produtos com rigor para garantir que você receba o melhor.
-        3.  🤝 **Suporte Ágil:** Nossa equipe está sempre pronta para ouvir e resolver suas dúvidas.
+        **🌟 Satisfação Garantida** — Trabalhamos incansavelmente para que sua experiência seja perfeita.
+        
+        **🛡️ Qualidade e Confiança** — Selecionamos produtos com rigor para garantir que você receba o melhor.
+        
+        **🤝 Suporte Ágil** — Nossa equipe está sempre pronta para ouvir e resolver suas dúvidas.
+        
+        ---
         
         Obrigado por escolher a **D.L Online Store**. Boas compras!
         """)
 
 elif st.session_state.pg == "Quem Somos":
-    st.header("👥 Quem Somos")
+    st.markdown('<h1>👥 Quem Somos</h1>', unsafe_allow_html=True)
     st.write("Especialistas em e-commerce e curadoria de produtos de alta qualidade.")
 
 elif st.session_state.pg == "Serviços":
-    st.header("🛠️ Nossos Serviços")
+    st.markdown('<h1>🛠️ Nossos Serviços</h1>', unsafe_allow_html=True)
     st.write("Vendas e logística eficiente em marketplaces globais.")
 
 elif st.session_state.pg == "Contato":
-    st.header("✉️ Central de Atendimento")
+    st.markdown('<h1>✉️ Central de Atendimento</h1>', unsafe_allow_html=True)
     whatsapp_url = "https://wa.me/5511960501826"
-    st.markdown(f'<a href="{whatsapp_url}" target="_blank" style="text-decoration: none;"><div style="background-color: #25D366; color: white; padding: 15px; border-radius: 10px; display: inline-block; font-weight: bold; font-size: 18px;">Falar no WhatsApp: (11) 96050-1826</div></a>', unsafe_allow_html=True)
+    st.markdown(f'<a href="{whatsapp_url}" target="_blank" style="text-decoration: none;"><div style="background: linear-gradient(135deg, #10b981 0%, #059669 100%); color: white; padding: 16px; border-radius: 12px; display: inline-block; font-weight: 600; font-size: 16px; box-shadow: 0 4px 12px rgba(16, 185, 129, 0.3);">💬 Falar no WhatsApp: (11) 96050-1826</div></a>', unsafe_allow_html=True)
     st.divider()
     with st.form("form_contato"):
         nome = st.text_input("Nome")
@@ -410,59 +523,64 @@ elif st.session_state.pg == "Contato":
         if st.form_submit_button("Gerar E-mail"):
             if nome and msg:
                 mailto = f"mailto:vendas.dlonlinestore@gmail.com?subject={tipo}&body={msg}"
-                st.markdown(f'<a href="{mailto}" style="background-color:#007bff; color:white; padding:10px; border-radius:5px; text-decoration:none;">📧 Abrir E-mail</a>', unsafe_allow_html=True)
+                st.markdown(f'<a href="{mailto}" style="background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%); color: white; padding: 12px 20px; border-radius: 8px; text-decoration: none; font-weight: 600; display: inline-block; box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);">📧 Abrir E-mail</a>', unsafe_allow_html=True)
 
-                
 # --- PÁGINA PENDÊNCIAS ---
 elif st.session_state.pg == "Pendencias":
-    st.header("📋 Pendências e Anotações (GCP)")
+    st.markdown('<h1>📋 Pendências e Anotações</h1>', unsafe_allow_html=True)
+    st.markdown('<div class="section-header"></div>', unsafe_allow_html=True)
+    
     with st.container(border=True):
         col_input, col_btn = st.columns([3, 1])
         with col_input:
-            nova_nota = st.text_input("O que precisa ser feito?", placeholder="Ex: estoque...", key="txt_gcp")
+            nova_nota = st.text_input("O que precisa ser feito?", placeholder="Ex: atualizar estoque...", key="txt_gcp", label_visibility="collapsed")
         with col_btn:
-            st.markdown('<div style="padding-top: 28px;"></div>', unsafe_allow_html=True)
+            st.markdown('<div style="padding-top: 7px;"></div>', unsafe_allow_html=True)
             if st.button("Adicionar", use_container_width=True, type="primary"):
                 if nova_nota:
                     inserir_anotacao_bq(nova_nota)
                     st.rerun()
 
-    st.divider()
+    st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
     df_notas = buscar_anotacoes_bq()
     if not df_notas.empty:
         for index, row in df_notas.iterrows():
             c_check, c_texto, c_del = st.columns([0.5, 8.5, 1])
             with c_check:
-                check = st.checkbox(" ", value=row['status_concluido'], key=f"check_{row['id']}")
+                check = st.checkbox(" ", value=row['status_concluido'], key=f"check_{row['id']}", label_visibility="collapsed")
                 if check != row['status_concluido']:
                     atualizar_status_bq(row['id'], check)
                     st.rerun()
             with c_texto:
-                if row['status_concluido']: st.markdown(f"~~{row['anotacao']}~~")
-                else: st.write(row['anotacao'])
+                if row['status_concluido']: 
+                    st.markdown(f"<span style='text-decoration: line-through; color: #9ca3af;'>{row['anotacao']}</span>", unsafe_allow_html=True)
+                else: 
+                    st.write(row['anotacao'])
             with c_del:
-                if st.button("❌", key=f"del_{row['id']}"):
+                if st.button("❌", key=f"del_{row['id']}", help="Deletar"):
                     excluir_anotacao_bq(row['id'])
                     st.rerun()
+    else:
+        st.info("Nenhuma pendência no momento.")
 
-
-# 2. PÁGINA CALCULADORA
+# --- PÁGINA CALCULADORA ---
 elif st.session_state.pg == "Calculadora":
-    st.header("📊 Comparativo de Preços")
+    st.markdown('<h1>📊 Comparativo de Preços</h1>', unsafe_allow_html=True)
+    st.markdown('<div class="section-header"></div>', unsafe_allow_html=True)
+    
     if not df_base_completa.empty:
         df_geral = df_base_completa.copy()
-        # Garanta que a função converter_custo_seguro esteja definida no seu código global
         df_geral['Custo_aquisicao_num'] = df_geral['Custo_aquisicao'].apply(converter_custo_seguro)
         
         col_sel1, col_sel2 = st.columns(2)
         
         with col_sel1:
             opcoes_produtos = sorted([str(p) for p in df_geral['Produto'].unique()])
-            prod_sel = st.selectbox("Pesquisar Produto", opcoes_produtos, index=None, placeholder="Digite o produto...")
+            prod_sel = st.selectbox("Pesquisar Produto", opcoes_produtos, index=None, placeholder="Digite o produto...", label_visibility="collapsed")
             
         with col_sel2:
             opcoes_skus = sorted([str(s) for s in df_geral['SKU'].unique()])
-            v_sku_sel = st.selectbox("Pesquisar por SKU", opcoes_skus, index=None, placeholder="Busque o SKU...")
+            v_sku_sel = st.selectbox("Pesquisar por SKU", opcoes_skus, index=None, placeholder="Busque o SKU...", label_visibility="collapsed")
 
         final_item = None
         if v_sku_sel: 
@@ -472,31 +590,46 @@ elif st.session_state.pg == "Calculadora":
 
         if final_item is not None:
             cust_aq = final_item['Custo_aquisicao_num']
-            st.info(f"Selecionado: {final_item['Produto']} | SKU: {final_item['SKU']}")
+            st.markdown(f"""
+            <div style="background: linear-gradient(135deg, #dbeafe 0%, #e0f2fe 100%); border: 1px solid #7dd3fc; border-radius: 12px; padding: 16px; margin-bottom: 20px;">
+            <p style="margin: 0; color: #0369a1;"><strong>✓ Selecionado:</strong> {final_item['Produto']} <code style="background: white; padding: 2px 8px; border-radius: 4px; margin-left: 8px;">{final_item['SKU']}</code></p>
+            </div>
+            """, unsafe_allow_html=True)
+            
             margem_input = st.number_input("Margem de Lucro Desejada (%)", min_value=1.0, value=15.0, step=1.0)
             
-            # Garanta que a função calcular_venda_completo esteja definida no seu código global
             p_shein, l_shein = calcular_venda_completo(cust_aq, margem_input, "shein")
             p_shopee, l_shopee = calcular_venda_completo(cust_aq, margem_input, "shopee")
             p_temu, l_temu = calcular_venda_completo(cust_aq, margem_input, "temu")
             p_tiktok, l_tiktok = calcular_venda_completo(cust_aq, margem_input, "tiktok")
             
-            st.divider()
-            st.metric("Custo de Aquisição Base", f"R$ {cust_aq:.2f}")
+            st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
+            
+            col1, col2 = st.columns([1, 3])
+            with col1:
+                st.metric("💰 Custo Base", f"R$ {cust_aq:.2f}")
+            
             res = {
                 "Canal": ["SHEIN", "SHOPEE", "TEMU", "TIKTOK"], 
                 "Preço Sugerido": [f"R$ {p_shein:.2f}", f"R$ {p_shopee:.2f}", f"R$ {p_temu:.2f}", f"R$ {p_tiktok:.2f}"], 
-                "Lucro Líquido Real": [f"R$ {l_shein:.2f}", f"R$ {l_shopee:.2f}", f"R$ {l_temu:.2f}", f"R$ {l_tiktok:.2f}"]
+                "Lucro Líquido": [f"R$ {l_shein:.2f}", f"R$ {l_shopee:.2f}", f"R$ {l_temu:.2f}", f"R$ {l_tiktok:.2f}"]
             }
-            st.table(pd.DataFrame(res))
+            
+            df_resultado = pd.DataFrame(res)
+            st.dataframe(df_resultado, use_container_width=True, hide_index=True)
+    else:
+        st.info("Nenhum produto cadastrado ainda.")
 
+# --- PÁGINA ANÁLISE DE VENDAS ---
 elif st.session_state.pg == "Análise de Vendas":
-    st.header("📈 Análise de Vendas")
+    st.markdown('<h1>📈 Análise de Vendas</h1>', unsafe_allow_html=True)
+    st.markdown('<div class="section-header"></div>', unsafe_allow_html=True)
+    
     if not df_base_completa.empty:
         df_rel = df_base_completa.copy()
         df_rel['Custo_num'] = df_rel['Custo_aquisicao'].apply(converter_custo_seguro)
-        st.divider()
-        st.subheader("🏆 Inteligência de Mercado (Melhor Margem)")
+        
+        st.markdown('<h3>🏆 Inteligência de Mercado (Melhor Margem)</h3>', unsafe_allow_html=True)
         m_alvo = st.slider("Margem para Análise (%)", 1.0, 50.0, 2.0)
         rank_data = []
         for _, r in df_rel.iterrows():
@@ -508,7 +641,7 @@ elif st.session_state.pg == "Análise de Vendas":
             rank_data.append({"Produto": r['Produto'], "SKU": r['SKU'], "Lucro Estimado": round(max_l, 2)})
         
         df_rank = pd.DataFrame(rank_data).sort_values(by="Lucro Estimado", ascending=False)
-        st.dataframe(df_rank, use_container_width=True)
+        st.dataframe(df_rank, use_container_width=True, hide_index=True)
         
         buffer = io.BytesIO()
         with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
@@ -521,11 +654,13 @@ elif st.session_state.pg == "Análise de Vendas":
             file_name="ranking_lucro_dl_store.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
+    else:
+        st.info("Nenhum produto cadastrado ainda.")
 
-
-# --- SEÇÃO DE CADASTRO ---
+# --- PÁGINA CADASTRO ---
 elif st.session_state.pg == "Cadastro":
-    st.header("📝 Novo Item na Base")
+    st.markdown('<h1>📝 Novo Item na Base</h1>', unsafe_allow_html=True)
+    st.markdown('<div class="section-header"></div>', unsafe_allow_html=True)
     
     if 'cont_var' not in st.session_state:
         st.session_state.cont_var = 0
@@ -542,19 +677,15 @@ elif st.session_state.pg == "Cadastro":
             st.session_state.cont_var = 0
             st.rerun()
 
-    # --- CAMPOS PRINCIPAIS ---
     m = st.selectbox("Marketplace", ["shein", "shopee", "temu", "tiktok", "todos"])
     n = st.text_input("Nome Base do Produto")
     s_base = st.text_input("SKU Base")
-    
-    # Este é o custo que as variantes vão "copiar" por padrão
     c_padrao = st.number_input("Custo Unitário Base (R$)", min_value=0.01, step=0.01, value=0.01)
     
     lista_variantes = []
     
-    # --- VARIANTES (COM PREÇO INDIVIDUAL) ---
     if st.session_state.cont_var > 0:
-        st.divider()
+        st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
         for i in range(st.session_state.cont_var):
             c1, c2, c3 = st.columns([2, 2, 1])
             
@@ -563,7 +694,6 @@ elif st.session_state.pg == "Cadastro":
             with c2:
                 v_char = st.text_input(f"Cor/Tipo {i+1}", key=f"vchar_{i}")
             with c3:
-                # O valor inicial é o c_padrao, mas o usuário pode alterar individualmente
                 v_custo = st.number_input(
                     f"Custo {i+1}", 
                     min_value=0.01, 
@@ -579,7 +709,6 @@ elif st.session_state.pg == "Cadastro":
                     "custo_variante": v_custo
                 })
 
-    # --- LÓGICA DE VALIDAÇÃO DE SKU (NÃO DEIXA DUPLICAR NA BASE) ---
     sku_bloqueado = False
     todos_skus_digitados = []
     
@@ -604,10 +733,9 @@ elif st.session_state.pg == "Cadastro":
         except Exception as e:
             st.caption("Validando SKUs no banco de dados...")
 
-    st.divider()
+    st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
 
-    # --- BOTÃO SALVAR ---
-    if st.button("🚀 Salvar Tudo no BigQuery", type="primary"):
+    if st.button("🚀 Salvar Tudo no BigQuery", type="primary", use_container_width=True):
         if sku_bloqueado:
             st.error("🚨 Gravação interrompida! Existem SKUs duplicados.")
         elif not n or not s_base:
@@ -619,14 +747,12 @@ elif st.session_state.pg == "Cadastro":
                 
                 lote_bq = []
                 for aba in mkt_list:
-                    # Adiciona o Item Base
                     lote_bq.append({
                         "marketplace": aba, 
                         "sku": str(s_base).strip().upper(),
                         "produto": str(n), 
                         "custo_aquisicao": float(c_padrao)
                     })
-                    # Adiciona as Variantes com seus preços específicos
                     for var in lista_variantes:
                         lote_bq.append({
                             "marketplace": aba,
@@ -647,15 +773,14 @@ elif st.session_state.pg == "Cadastro":
             except Exception as e:
                 st.error(f"Falha técnica: {e}")
 
-
+# --- PÁGINA ALTERAR PREÇO ---
 elif st.session_state.pg == "Alterar Preco":
-    st.header("📦 Atualização de Preços em Lote")
+    st.markdown('<h1>💰 Atualização de Preços em Lote</h1>', unsafe_allow_html=True)
+    st.markdown('<div class="section-header"></div>', unsafe_allow_html=True)
 
-    # Inicializa a lista de alterações na sessão se não existir
     if 'lista_updates' not in st.session_state:
         st.session_state.lista_updates = []
 
-    # 1. Busca os produtos para o Selectbox
     @st.cache_data(ttl=600)
     def listar_skus_disponiveis():
         query = "SELECT DISTINCT sku, produto, custo_aquisicao FROM `leandro-marketplace.DL_Store_Online.tb_produtos` ORDER BY produto"
@@ -663,11 +788,9 @@ elif st.session_state.pg == "Alterar Preco":
 
     df_produtos = listar_skus_disponiveis()
 
-    # --- ÁREA DE ADIÇÃO ---
     with st.expander("➕ Adicionar Item para Alteração", expanded=True):
         opcoes = df_produtos.apply(lambda x: f"{x['sku']} - {x['produto']}", axis=1).tolist()
         
-        # Campo agora permite digitar livremente e começa vazio
         selecao_item = st.selectbox(
             "Busque o SKU ou Nome do Produto", 
             options=opcoes, 
@@ -693,7 +816,6 @@ elif st.session_state.pg == "Alterar Preco":
                 )
 
             if st.button("Adicionar à Fila", type="secondary"):
-                # Adiciona à lista temporária na session_state
                 st.session_state.lista_updates.append({
                     "sku": sku_ref,
                     "produto": dados_ref['produto'],
@@ -703,82 +825,79 @@ elif st.session_state.pg == "Alterar Preco":
         else:
             st.info("Pesquise um produto acima para ajustar o valor.")
 
-    # --- FILA DE PROCESSAMENTO ---
     if st.session_state.lista_updates:
-        st.subheader("📋 Itens na Fila")
+        st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
+        st.markdown('<h3>📋 Itens na Fila de Processamento</h3>', unsafe_allow_html=True)
         
-        # Exibe o que será alterado
         for i, item in enumerate(st.session_state.lista_updates):
             col_info, col_del = st.columns([4, 1])
-            col_info.info(f"**SKU:** {item['sku']} | **Novo Valor:** R$ {item['novo_valor']:.2f}")
+            with col_info:
+                st.markdown(f"""
+                <div style="background: #fef3c7; border-left: 4px solid #f59e0b; padding: 12px; border-radius: 8px;">
+                <p style="margin: 0; font-size: 14px;"><strong>{item['produto']}</strong></p>
+                <p style="margin: 4px 0 0 0; font-size: 13px; color: #92400e;"><code>{item['sku']}</code> → <strong>R$ {item['novo_valor']:.2f}</strong></p>
+                </div>
+                """, unsafe_allow_html=True)
             if col_del.button("🗑️", key=f"del_{i}"):
                 st.session_state.lista_updates.pop(i)
                 st.rerun()
 
-        st.divider()
+        st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
         
         col_btn1, col_btn2 = st.columns(2)
         
         with col_btn1:
-            if st.button("🚀 Enviar Pacote ao BigQuery", type="primary"):
+            if st.button("🚀 Enviar Pacote ao BigQuery", type="primary", use_container_width=True):
                 try:
-                    # Criamos um script único com múltiplos UPDATES
                     queries = []
                     for item in st.session_state.lista_updates:
                         q = f"UPDATE `leandro-marketplace.DL_Store_Online.tb_produtos` SET custo_aquisicao = {float(item['novo_valor'])} WHERE sku = '{item['sku']}';"
                         queries.append(q)
                     
                     full_query = "\n".join(queries)
-                    
-                    # Executa o pacote de uma vez
                     job = client_bq.query(full_query)
                     job.result()
 
                     st.success(f"✅ Sucesso! {len(st.session_state.lista_updates)} itens atualizados.")
-                    st.session_state.lista_updates = [] # Limpa a fila
+                    st.session_state.lista_updates = []
                     st.cache_data.clear()
                     st.balloons()
                 except Exception as e:
                     st.error(f"Erro no processamento em lote: {e}")
         
         with col_btn2:
-            if st.button("❌ Limpar Fila"):
+            if st.button("❌ Limpar Fila", use_container_width=True):
                 st.session_state.lista_updates = []
                 st.rerun()
-    else:
-        st.write("") # Espaçador visual
 
-
-
-
-# --- SEÇÃO DO DASHBOARD ---
+# --- DASHBOARD FINANCEIRO ---
 elif st.session_state.pg == "Dashboard":
-    # --- SEGUNDA CAMADA DE SEGURANÇA ---
     if 'fin_acesso' not in st.session_state:
         st.session_state.fin_acesso = False
 
     if not st.session_state.fin_acesso:
-        st.header("🔐 Acesso Restrito")
+        st.markdown('<h1>🔐 Acesso Restrito</h1>', unsafe_allow_html=True)
+        st.markdown('<div class="section-header"></div>', unsafe_allow_html=True)
         col_senha, _ = st.columns([1, 2])
         with col_senha:
-            senha_financeira = st.text_input("Digite a senha do Dashboard Financeiro", type="password")
-            if st.button("Acessar Dados Sensíveis", type="primary"):
-                # Defina aqui sua senha de segunda camada
+            senha_financeira = st.text_input("Digite a senha do Dashboard", type="password", placeholder="Senha")
+            if st.button("Acessar Dados Sensíveis", type="primary", use_container_width=True):
                 if senha_financeira == "D@niliz2026": 
                     st.session_state.fin_acesso = True
                     st.rerun()
                 else:
                     st.error("Senha incorreta!")
-        st.stop() # Interrompe a execução aqui até que a senha esteja correta
+        st.stop()
+    
     from datetime import timedelta
     import plotly.graph_objects as go
     from plotly.subplots import make_subplots
-    st.header("📊 Dashboard Financeiro")
+    st.markdown('<h1>📊 Dashboard Financeiro</h1>', unsafe_allow_html=True)
+    st.markdown('<div class="section-header"></div>', unsafe_allow_html=True)
     
     if 'processando_venda' not in st.session_state:
         st.session_state.processando_venda = False
 
-    # --- 1. REGISTRO DE NOVA VENDA (BIGQUERY) ---
     with st.expander("➕ Registrar Nova Venda", expanded=True):
         if not df_base_completa.empty:
             df_dash = df_base_completa.copy()
@@ -797,7 +916,11 @@ elif st.session_state.pg == "Dashboard":
 
             if item_venda is not None:
                 v_nome_final, v_sku_final, v_custo_base = item_venda['Produto'], item_venda['SKU'], item_venda['Custo_num']
-                st.success(f"✅ Item: **{v_nome_final}** | SKU: **{v_sku_final}** | Custo Base: **R$ {v_custo_base:.2f}**")
+                st.markdown(f"""
+                <div style="background: linear-gradient(135deg, #dbeafe 0%, #e0f2fe 100%); border: 1px solid #7dd3fc; border-radius: 12px; padding: 16px; margin-bottom: 20px;">
+                <p style="margin: 0; color: #0369a1;"><strong>✓</strong> {v_nome_final} | <code>{v_sku_final}</code> | Base: <strong>R$ {v_custo_base:.2f}</strong></p>
+                </div>
+                """, unsafe_allow_html=True)
                 
                 c_v1, c_v2, c_v3 = st.columns(3)
                 with c_v1:
@@ -812,14 +935,14 @@ elif st.session_state.pg == "Dashboard":
                     else: com, tax = 0.0, 0.0
                     lucro_un_calc = v_preco_venda - (v_preco_venda * com) - (v_preco_venda * imp) - v_custo_base - c_fixo - tax
                     v_margem_auto = (lucro_un_calc / v_preco_venda * 100) if v_preco_venda > 0 else 0.0
-                    st.write(f"Margem: **{v_margem_auto:.2f}%**")
+                    st.markdown(f"<p style='text-align: center; color: #059669; font-size: 14px; font-weight: 600; margin-top: 24px;'>📈 Margem: <strong>{v_margem_auto:.1f}%</strong></p>", unsafe_allow_html=True)
                 with c_v3:
                     v_data = st.date_input("Data da Venda", value=(datetime.utcnow() - timedelta(hours=3)))
                     lucro_total_dinamico = lucro_un_calc * v_qtd
                     st.metric("Lucro Total", f"R$ {lucro_total_dinamico:.2f}")
 
                 if not st.session_state.processando_venda:
-                    if st.button("🚀 Confirmar e Registrar Venda", type="primary"):
+                    if st.button("🚀 Confirmar e Registrar Venda", type="primary", use_container_width=True):
                         st.session_state.processando_venda = True
                         try:
                             table_id = "leandro-marketplace.DL_Store_Online.tb_vendas_realizadas"
@@ -838,8 +961,7 @@ elif st.session_state.pg == "Dashboard":
                         except Exception as e:
                             st.error(f"Erro: {e}"); st.session_state.processando_venda = False
 
-    # --- 2. SEÇÃO DE GRÁFICOS ---
-    st.divider()
+    st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
     try:
         query = "SELECT * FROM `leandro-marketplace.DL_Store_Online.tb_vendas_realizadas` ORDER BY data DESC"
         df_vendas = client_bq.query(query).to_dataframe()
@@ -855,7 +977,6 @@ elif st.session_state.pg == "Dashboard":
             hoje = datetime.utcnow() - timedelta(hours=3)
             inicio_mes_atual = hoje.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
 
-            # Agrupamento barras
             df_passado = df_vendas[df_vendas['Data'] < inicio_mes_atual].copy()
             barras_meses_fechados = pd.DataFrame()
             if not df_passado.empty:
@@ -875,11 +996,8 @@ elif st.session_state.pg == "Dashboard":
                 df_plot_atual = pd.concat([total_atual, df_diario], ignore_index=True)
 
             df_plot = pd.concat([barras_meses_fechados, df_plot_atual], ignore_index=True)
-
-            # Criar DF específico para a linha (Removendo "Mês Atual" e meses passados se houver)
             df_linha = df_plot[~df_plot['Data_Label'].isin(['Mês Atual']) & df_plot['Data_Label'].str.contains('/')].copy()
 
-# --- SELEÇÃO DE MÊS E PREPARAÇÃO DE DADOS ---
             df_vendas['Mes_Ref'] = df_vendas['Data'].dt.strftime('%m/%Y')
             opcoes_meses = sorted(df_vendas['Mes_Ref'].unique(), reverse=True)
             
@@ -887,10 +1005,8 @@ elif st.session_state.pg == "Dashboard":
             with col_f:
                 mes_selecionado = st.selectbox("📅 Selecionar Mês para Detalhamento:", opcoes_meses)
 
-            # Filtramos o detalhamento pelo mês escolhido
             df_detalhe = df_vendas[df_vendas['Mes_Ref'] == mes_selecionado].copy()
             
-            # 1. Barras de meses fechados (histórico)
             meses_fechados = df_vendas[df_vendas['Mes_Ref'] != mes_selecionado].copy()
             barras_hist = pd.DataFrame()
             if not meses_fechados.empty:
@@ -900,7 +1016,6 @@ elif st.session_state.pg == "Dashboard":
                 barras_hist['Outros Custos'] = barras_hist['Faturamento'] - barras_hist['Lucro Total']
                 barras_hist.rename(columns={'Label': 'Data_Label'}, inplace=True)
 
-            # 2. Barra de Total do Mês Selecionado + Dias
             df_plot_mes = pd.DataFrame()
             if not df_detalhe.empty:
                 total_mes = pd.DataFrame([{
@@ -916,24 +1031,19 @@ elif st.session_state.pg == "Dashboard":
                 df_dias['Data_Label'] = df_dias['Data'].dt.strftime('%d/%m')
                 df_plot_mes = pd.concat([total_mes, df_dias], ignore_index=True)
 
-            # DataFrame final para as BARRAS
             df_plot = pd.concat([barras_hist, df_plot_mes], ignore_index=True)
-            
-            # DataFrame para a LINHA (não inclui os totais acumulados, apenas pontos temporais)
             df_linha = df_plot[~df_plot['Data_Label'].str.contains('Total')].copy()
 
-            # --- GRÁFICO (O TRECHO QUE VOCÊ PEDIU) ---
-            st.subheader("📈 Desempenho Mensal e Diário")
+            st.markdown('<h3>📈 Desempenho Mensal e Diário</h3>', unsafe_allow_html=True)
             with st.container():
                 st.markdown('<div class="plot-container">', unsafe_allow_html=True)
                 fig = make_subplots(specs=[[{"secondary_y": True}]])
                 
-                # Barras
                 fig.add_trace(go.Bar(
                     x=df_plot['Data_Label'], 
                     y=df_plot['Outros Custos'], 
                     name='Outros Custos', 
-                    marker_color='#FFF9E6', 
+                    marker_color='#FEF3C7', 
                     hovertemplate='R$ %{y:,.2f}<extra></extra>'
                 ), secondary_y=False)
                 
@@ -941,24 +1051,23 @@ elif st.session_state.pg == "Dashboard":
                     x=df_plot['Data_Label'], 
                     y=df_plot['Lucro Total'], 
                     name='Lucro Líquido', 
-                    marker_color='#FFD700', 
+                    marker_color='#FBBF24', 
                     hovertemplate='R$ %{y:,.2f}<extra></extra>', 
                     text=df_plot['Lucro Total'].apply(lambda x: f'R$ {x:,.2f}'), 
                     textposition='outside', 
-                    textfont=dict(size=14, color='black', family="Arial Black")
+                    textfont=dict(size=12, color='#92400E', family="Arial")
                 ), secondary_y=False)
                 
-                # Linha Cinza Escuro
                 fig.add_trace(go.Scatter(
                     x=df_linha['Data_Label'], 
                     y=df_linha['Quantidade'], 
                     name='Qtd Vendas', 
                     mode='lines+markers+text',
-                    line=dict(color='#333333', width=2), 
-                    marker=dict(size=7, color='#333333'),
+                    line=dict(color='#6366F1', width=3), 
+                    marker=dict(size=8, color='#6366F1'),
                     text=df_linha['Quantidade'], 
                     textposition="top center",
-                    textfont=dict(size=12, color='#333333', family="Arial Black"),
+                    textfont=dict(size=11, color='#6366F1', family="Arial"),
                     hovertemplate='Vendas: %{y}<extra></extra>'
                 ), secondary_y=True)
 
@@ -968,31 +1077,26 @@ elif st.session_state.pg == "Dashboard":
                     plot_bgcolor='white', 
                     yaxis=dict(showgrid=False, zeroline=False, showticklabels=False, fixedrange=True, range=[0, df_plot['Faturamento'].max() * 2.2]), 
                     yaxis2=dict(showgrid=False, zeroline=False, showticklabels=False, fixedrange=True, range=[df_plot['Quantidade'].max() * -1.5, df_plot['Quantidade'].max() * 1.2]),
-                    xaxis=dict(title="Competência / Dias", showgrid=False, showline=True, linecolor='black', tickfont=dict(color='black', size=13)), 
-                    legend=dict(orientation="h", yanchor="bottom", y=1.1, xanchor="center", x=0.5, font=dict(color="black", size=14)), 
+                    xaxis=dict(title="Competência / Dias", showgrid=False, showline=True, linecolor='#E5E7EB', tickfont=dict(color='#6B7280', size=12)), 
+                    legend=dict(orientation="h", yanchor="bottom", y=1.1, xanchor="center", x=0.5, font=dict(color="#374151", size=13)), 
                     margin=dict(l=10, r=10, t=80, b=60), 
                     hovermode='x unified'
                 )
                 st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
                 st.markdown('</div>', unsafe_allow_html=True)
 
-# --- CÁLCULO MÉTRICAS MÊS ATUAL ---
             hoje = datetime.utcnow() - timedelta(hours=3)
             inicio_mes = hoje.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
             df_mes_atual = df_vendas[df_vendas['Data'] >= inicio_mes]
 
-            # --- SEÇÃO DE MÉTRICAS ---
-            st.divider()
-            
-            # Linha 1: Totais Gerais
-            st.markdown("### 📊 Totais Acumulados")
+            st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
+            st.markdown('<h3>📊 Totais Acumulados</h3>', unsafe_allow_html=True)
             c1, c2, c3 = st.columns(3)
             c1.metric("Faturamento Total", f"R$ {df_vendas['Faturamento'].sum():.2f}")
             c2.metric("Lucro Líquido Geral", f"R$ {df_vendas['Lucro Total'].sum():.2f}")
             c3.metric("Total Itens Vendidos", int(df_vendas['Quantidade'].sum()))
 
-            # Linha 2: Performance do Mês Atual
-            st.markdown("### 📅 Performance do Mês Atual")
+            st.markdown('<h3>📅 Performance do Mês Atual</h3>', unsafe_allow_html=True)
             m1, m2, m3 = st.columns(3)
             
             fat_mes = df_mes_atual['Faturamento'].sum()
@@ -1003,34 +1107,26 @@ elif st.session_state.pg == "Dashboard":
             m2.metric("Lucro Mensal", f"R$ {lucro_mes:,.2f}")
             m3.metric("Vendas no Mês", qtd_mes)
 
-            # --- ABAIXO DAS MÉTRICAS (c1, c2, c3) E ANTES DO HISTÓRICO ---
+            st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
+            st.markdown('<h3>💎 Lucro Líquido por Plataforma</h3>', unsafe_allow_html=True)
 
-# --- NOVO GRÁFICO: SHARE POR PLATAFORMA ---
-            st.divider()
-            st.subheader("💎 Lucro Líquido por Plataforma")
-
-            # Agrupando os dados para a pizza
             df_pizza = df_vendas.groupby('Marketplace')['Lucro Total'].sum().reset_index()
-
-            # Cores personalizadas
             cores_map = {'shein': '#FFD700', 'shopee': '#EE4D2D', 'temu': '#FF8C00', 'tiktok': '#000000'}
-            cores_lista = [cores_map.get(m, '#333333') for m in df_pizza['Marketplace']]
+            cores_lista = [cores_map.get(m, '#6B7280') for m in df_pizza['Marketplace']]
 
             fig_pizza = go.Figure(data=[go.Pie(
                 labels=df_pizza['Marketplace'].str.upper(), 
                 values=df_pizza['Lucro Total'],
                 hole=.4,
                 marker=dict(colors=cores_lista),
-                # Exibe Nome, Valor e Percentual
                 textinfo='label+value+percent', 
-                # Formatação: Nome em Negrito, R$ com 2 casas e % com 1 casa
                 texttemplate='<b>%{label}</b><br>R$ %{value:,.2f}<br>(%{percent:.1%})',
                 hovertemplate='R$ %{value:,.2f}<extra></extra>'
             )])
 
             fig_pizza.update_layout(
-                paper_bgcolor='white', # Fundo total branco
-                plot_bgcolor='white',  # Fundo do gráfico branco
+                paper_bgcolor='white', 
+                plot_bgcolor='white',  
                 margin=dict(l=20, r=20, t=30, b=20),
                 showlegend=True,
                 legend=dict(
@@ -1039,19 +1135,17 @@ elif st.session_state.pg == "Dashboard":
                     y=-0.1, 
                     xanchor="center", 
                     x=0.5,
-                    font=dict(color="black") # Texto da legenda em preto
+                    font=dict(color="#374151", size=12)
                 )
             )
 
             st.plotly_chart(fig_pizza, use_container_width=True, config={'displayModeBar': False})
             
-# --- SEÇÃO DO HISTÓRICO COM SCROLL ---
-            st.divider()
-            st.subheader("📋 Histórico de Vendas")
+            st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
+            st.markdown('<h3>📋 Histórico de Vendas</h3>', unsafe_allow_html=True)
             
-            # Cabeçalho Fixo (fora do scroll)
             st.markdown("""
-                <div style="display: flex; font-weight: bold; background-color: #f8f9fa; padding: 10px 15px; border: 1px solid #e6e6e6; border-radius: 10px 10px 0 0;">
+                <div style="display: flex; font-weight: 600; background-color: #F3F4F6; padding: 12px 16px; border: 1px solid #E5E7EB; border-radius: 10px 10px 0 0; color: #374151; font-size: 13px;">
                     <div style="flex: 3;">Produto</div>
                     <div style="flex: 2;">SKU</div>
                     <div style="flex: 1;">Qtd</div>
@@ -1061,7 +1155,6 @@ elif st.session_state.pg == "Dashboard":
                 </div>
             """, unsafe_allow_html=True)
             
-            # Container com Scroll (altura de 500px, você pode ajustar)
             with st.container(height=500):
                 for idx, row in df_vendas.iterrows():
                     cols = st.columns([3, 2, 1, 2, 2, 1])
@@ -1081,15 +1174,14 @@ elif st.session_state.pg == "Dashboard":
     except Exception as e:
         st.error(f"Erro no Dashboard: {e}")
 
-# --- SEÇÃO DE ESTOQUE ---
+# --- GESTÃO DE ESTOQUE ---
 elif st.session_state.pg == "Gestão de Estoque":
-    st.header("📦 Gestão de Estoque")
+    st.markdown('<h1>📦 Gestão de Estoque</h1>', unsafe_allow_html=True)
+    st.markdown('<div class="section-header"></div>', unsafe_allow_html=True)
     
-    # IDs das Tabelas para referência
     table_id_viva = "leandro-marketplace.DL_Store_Online.tb_estoque"
     table_id_hist = "leandro-marketplace.DL_Store_Online.tb_estoque_historico"
     
-    # --- 1. ENTRADA DE PRODUTO ---
     with st.expander("📥 Registrar Entrada de Mercadoria", expanded=True):
         if not df_base_completa.empty:
             df_est = df_base_completa.copy()
@@ -1120,7 +1212,11 @@ elif st.session_state.pg == "Gestão de Estoque":
                 item_estoque = df_est[df_est['Produto'] == e_prod_sel].iloc[0]
 
             if item_estoque is not None:
-                st.info(f"📍 Selecionado: **{item_estoque['Produto']}** (SKU: {item_estoque['SKU']})")
+                st.markdown(f"""
+                <div style="background: linear-gradient(135deg, #d1fae5 0%, #d1fae5 100%); border: 1px solid #6ee7b7; border-radius: 12px; padding: 16px; margin-bottom: 20px;">
+                <p style="margin: 0; color: #059669;"><strong>📍</strong> {item_estoque['Produto']} <code style="background: white; padding: 2px 8px; border-radius: 4px; margin-left: 8px;">{item_estoque['SKU']}</code></p>
+                </div>
+                """, unsafe_allow_html=True)
                 
                 c_in1, c_in2, c_in3 = st.columns(3)
                 with c_in1:
@@ -1165,8 +1261,7 @@ elif st.session_state.pg == "Gestão de Estoque":
                     except Exception as e: 
                         st.error(f"Erro ao salvar: {e}")
 
-    # --- 2. VISUALIZAÇÃO, GRÁFICO E GESTÃO ---
-    st.divider()
+    st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
     
     try:
         query_est = f"SELECT * FROM `{table_id_viva}`"
@@ -1194,8 +1289,7 @@ elif st.session_state.pg == "Gestão de Estoque":
             with m2: st.metric("🚀 Lucro Potencial", f"R$ {lucro_potencial_total:,.2f}")
             with m3: st.metric("📦 Total de Itens", f"{int(quantidade_total_itens)} un")
 
-            # --- GRÁFICO DE EVOLUÇÃO (PADRÃO FINANCEIRO) ---
-            st.subheader("📈 Foto do Estoque (Saldo Final do Dia)")
+            st.markdown('<h3>📈 Foto do Estoque (Saldo Final do Dia)</h3>', unsafe_allow_html=True)
             try:
                 query_h = f"SELECT data_movimentacao, quantidade FROM `{table_id_hist}` ORDER BY data_movimentacao ASC"
                 df_h_g = client_bq.query(query_h).to_dataframe()
@@ -1211,12 +1305,12 @@ elif st.session_state.pg == "Gestão de Estoque":
                     fig_foto = go.Figure(go.Bar(
                         x=df_diario['label'], 
                         y=df_diario['saldo_final'],
-                        marker_color='#FFD700', 
+                        marker_color='#FBBF24', 
                         text=df_diario['saldo_final'], 
                         textposition='outside',
-                        textfont=dict(size=12, color='black', family="Arial Black"),
+                        textfont=dict(size=11, color='#92400E', family="Arial"),
                         cliponaxis=False,
-                        width=0.4 
+                        width=0.5
                     ))
                     
                     fig_foto.update_layout(
@@ -1226,12 +1320,12 @@ elif st.session_state.pg == "Gestão de Estoque":
                         xaxis=dict(
                             visible=True,
                             showline=True,
-                            linecolor='black',
+                            linecolor='#E5E7EB',
                             linewidth=1,
                             showgrid=False,
                             showticklabels=True,
                             type='category',
-                            tickfont=dict(size=10, color='black', family="Arial"),
+                            tickfont=dict(size=10, color='#6B7280', family="Arial"),
                             tickangle=0
                         ),
                         yaxis=dict(
@@ -1246,25 +1340,24 @@ elif st.session_state.pg == "Gestão de Estoque":
             except Exception as e_graph:
                 st.error(f"Erro ao gerar gráfico: {e_graph}")
 
-            # --- TABELA DE GESTÃO POR SKU (FRAGMENTADA) ---
-            st.subheader("📋 Gestão de Inventário por SKU")
+            st.markdown('<h3>📋 Gestão de Inventário por SKU</h3>', unsafe_allow_html=True)
 
             @st.fragment
             def tabela_sku_interativa(df_raw):
                 df_visual_est = df_raw.groupby(['sku', 'produto']).agg({'quantidade': 'sum', 'valor_pago': 'mean'}).reset_index()
                 
-                st.markdown("""<div style="display: flex; font-weight: bold; background-color: #f8f9fa; padding: 10px 15px; border: 1px solid #e6e6e6; border-radius: 10px 10px 0 0;"><div style="flex: 2.5;">Produto</div><div style="flex: 1.2;">Melhor Canal</div><div style="flex: 1.2;">Lucro Total</div><div style="flex: 0.8;">Qtd</div><div style="flex: 1.5;">Ajustar (+/-)</div><div style="flex: 0.5;">Ação</div></div>""", unsafe_allow_html=True)
+                st.markdown("""<div style="display: flex; font-weight: 600; background-color: #F3F4F6; padding: 12px 16px; border: 1px solid #E5E7EB; border-radius: 10px 10px 0 0; color: #374151; font-size: 13px;"><div style="flex: 2.5;">Produto</div><div style="flex: 1.2;">Melhor Canal</div><div style="flex: 1.2;">Lucro Total</div><div style="flex: 0.8;">Qtd</div><div style="flex: 1.5;">Ajustar (+/-)</div><div style="flex: 0.5;">Ação</div></div>""", unsafe_allow_html=True)
 
                 for idx, r in df_visual_est.iterrows():
                     canal, lucro_un = recomendar_canal(r['valor_pago'])
                     cols = st.columns([2.5, 1.2, 1.2, 0.8, 1.5, 0.5])
                     
-                    cols[0].markdown(f"{r['produto']}<br><small><code>{r['sku']}</code></small>", unsafe_allow_html=True)
+                    cols[0].markdown(f"<strong>{r['produto']}</strong><br/><small><code>{r['sku']}</code></small>", unsafe_allow_html=True)
                     cols[1].markdown(f"**{canal}**")
                     cols[2].write(f"R$ {lucro_un * r['quantidade']:.2f}")
                     cols[3].write(str(int(r['quantidade'])))
                     
-                    ajuste = cols[4].number_input("Ajuste", step=1, value=0, key=f"adj_{idx}", label_visibility="collapsed")
+                    ajuste = cols[4].number_input("", step=1, value=0, key=f"adj_{idx}", label_visibility="collapsed")
                     
                     if cols[5].button("💾", key=f"bt_{idx}"):
                         if ajuste != 0:
@@ -1292,7 +1385,6 @@ elif st.session_state.pg == "Gestão de Estoque":
                                 st.error(f"Erro: {e_proc}")
                     st.divider()
 
-            # Chama a função fragmentada para exibir a tabela
             tabela_sku_interativa(df_raw)
 
         else:
