@@ -339,7 +339,7 @@ def calcular_venda_completo(custo_aquisicao, margem_percentual, mkt):
         lucro = preco - (preco * imposto_tax) - custo_aquisicao - custo_embalagem
         return preco, lucro
     elif mkt == "tiktok":
-        comissao_mkt, taxa_fixa = 0.22, 4.0
+        comissao_mkt, taxa_fixa = 0.12, 4.0
         divisor = 1 - (comissao_mkt + imposto_tax + margem_alvo)
         preco = (custo_aquisicao + custo_embalagem + taxa_fixa) / divisor if divisor > 0 else 0
         lucro = preco - (preco * comissao_mkt) - (preco * imposto_tax) - custo_aquisicao - custo_embalagem - taxa_fixa
@@ -407,6 +407,9 @@ with st.sidebar:
             st.rerun()
         if st.button("📦 Gestão de Estoque"): 
             st.session_state.pg = "Gestão de Estoque"
+            st.rerun()
+        if st.button("🏭 Campineira"):
+            st.session_state.pg = "Campineira"
             st.rerun()
             
         if st.button("📉 Dashboard Financeiro"): 
@@ -931,7 +934,7 @@ elif st.session_state.pg == "Dashboard":
                     imp, c_fixo = 0.06, 1.00
                     if mkt_venda == "shein": com, tax = 0.18, 5.0
                     elif mkt_venda == "shopee": com, tax = 0.20, (4.0 if v_custo_base < 50 else 20.0)
-                    elif mkt_venda == "tiktok": com, tax = 0.22, 4.0
+                    elif mkt_venda == "tiktok": com, tax = 0.12, 4.0
                     else: com, tax = 0.0, 0.0
                     lucro_un_calc = v_preco_venda - (v_preco_venda * com) - (v_preco_venda * imp) - v_custo_base - c_fixo - tax
                     v_margem_auto = (lucro_un_calc / v_preco_venda * 100) if v_preco_venda > 0 else 0.0
@@ -1174,6 +1177,11 @@ elif st.session_state.pg == "Dashboard":
     except Exception as e:
         st.error(f"Erro no Dashboard: {e}")
 
+# --- CAMPINEIRA ---
+elif st.session_state.pg == "Campineira":
+    from modulo_campineira import pagina_campineira
+    pagina_campineira()
+
 # --- GESTÃO DE ESTOQUE ---
 elif st.session_state.pg == "Gestão de Estoque":
     st.markdown('<h1>📦 Gestão de Estoque</h1>', unsafe_allow_html=True)
@@ -1275,7 +1283,7 @@ elif st.session_state.pg == "Gestão de Estoque":
                 tax_shopee = 4.0 if custo < 50 else 20.0
                 l_shopee = p_sugerido - (p_sugerido * 0.20) - (p_sugerido * imp) - custo - c_fixo - tax_shopee
                 l_temu = p_sugerido - (p_sugerido * imp) - custo - c_fixo
-                l_tiktok = p_sugerido - (p_sugerido * 0.22) - (p_sugerido * imp) - custo - c_fixo - 4.0
+                l_tiktok = p_sugerido - (p_sugerido * 0.12) - (p_sugerido * imp) - custo - c_fixo - 4.0
                 lucros = {"Shein": l_shein, "Shopee": l_shopee, "Temu": l_temu, "Tiktok": l_tiktok}
                 melhor_canal = max(lucros, key=lucros.get)
                 return melhor_canal, lucros[melhor_canal]
