@@ -1,8 +1,11 @@
 streamlit
 pandas
+gspread
+oauth2client
+selenium
+webdriver-manager
 google-cloud-bigquery
 google-auth
-pandas-gbq
 plotly
-xlsxwriter
-pyarrow
+openpyxl
+XlsxWriter
