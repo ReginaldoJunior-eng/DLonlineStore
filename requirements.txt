@@ -9,3 +9,4 @@ google-auth
 plotly
 openpyxl
 XlsxWriter
+db-dtypes
