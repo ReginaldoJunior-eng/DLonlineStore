@@ -764,15 +764,16 @@ elif st.session_state.pg == "Cadastro":
                             "custo_aquisicao": float(var['custo_variante'])
                         })
                 
-                errors = client_bq.insert_rows_json(table_id_produtos, lote_bq)
-                
-                if not errors:
-                    st.success(f"✅ Sucesso! {len(lote_bq)} registros salvos.")
-                    st.session_state.cont_var = 0
-                    st.cache_data.clear()
-                    st.rerun()
-                else:
-                    st.error(f"Erro BigQuery: {errors}")
+                # load_table_from_dataframe (carga em lote) em vez de insert_rows_json (streaming):
+                # linhas gravadas via streaming ficam presas no "streaming buffer" por um tempo,
+                # bloqueando UPDATE/DELETE (ex: na aba Alterar Preços) até o buffer esvaziar.
+                df_lote = pd.DataFrame(lote_bq)
+                client_bq.load_table_from_dataframe(df_lote, table_id_produtos).result()
+
+                st.success(f"✅ Sucesso! {len(lote_bq)} registros salvos.")
+                st.session_state.cont_var = 0
+                st.cache_data.clear()
+                st.rerun()
             except Exception as e:
                 st.error(f"Falha técnica: {e}")
 

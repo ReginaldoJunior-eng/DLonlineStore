@@ -60,6 +60,8 @@ import json
 import os
 import threading
 from datetime import datetime
+from google.cloud import bigquery
+from google.oauth2 import service_account
 
 # ============================================================
 # CONFIGURAÇÕES PADRÃO POR CATEGORIA
@@ -100,6 +102,8 @@ CATEGORIAS = [
 
 ARQUIVO_RESULTADOS = "campineira_resultados.json"
 ARQUIVO_STATUS     = "campineira_status.json"
+TABLE_CAMPINEIRA   = "leandro-marketplace.DL_Store_Online.tb_resultado_produtos_campineira"
+TABLE_PIPELINE     = "leandro-marketplace.DL_Store_Online.tb_pipeline_publicacao_campineira"
 
 # ============================================================
 # FUNÇÕES AUXILIARES
@@ -135,6 +139,131 @@ def calcular_precos_sugeridos(preco_str):
         precos[f"lucro_{mkt}"] = round(l, 2)
     return precos
 
+def conectar_bigquery_rpa():
+    """Conexão BigQuery independente do st.cache_resource.
+    O RPA roda em uma thread separada (threading.Thread), e funções decoradas
+    com @st.cache_resource (como a conectar_bigquery() do LeMarketplace) dependem
+    do ScriptRunContext do Streamlit, que não existe fora da thread principal —
+    por isso retornam None silenciosamente quando chamadas daqui."""
+    info = st.secrets["gcp_service_account"]
+    creds = service_account.Credentials.from_service_account_info(info)
+    return bigquery.Client(credentials=creds, project=info["project_id"])
+
+def registrar_produto_bq(client, id_captura, categoria, produto):
+    """Grava o produto capturado na tb_resultado_produtos_campineira assim que é extraído,
+    para não perder o resultado se o cache/disco local for limpo.
+    Retorna (sucesso: bool, erro: str|None)."""
+    if not client:
+        return False, "client BigQuery não conectado (conectar_bigquery() retornou None)"
+    try:
+        preco_str = produto.get("preco") or "R$ 0"
+        try:
+            preco_num = float(preco_str.replace("R$", "").replace(".", "").replace(",", ".").strip())
+        except:
+            preco_num = 0.0
+
+        sugeridos = calcular_precos_sugeridos(preco_str)
+
+        row = {
+            "id_captura": id_captura,
+            "data_captura": datetime.utcnow().isoformat(),
+            "id_produto": produto.get("id"),
+            "categoria": categoria,
+            "nome": produto.get("nome"),
+            "estoque": produto.get("estoque"),
+            "custo_campineira": preco_str,
+            "custo_campineira_num": preco_num,
+            "preco_shein": sugeridos.get("preco_shein"),
+            "lucro_shein": sugeridos.get("lucro_shein"),
+            "preco_shopee": sugeridos.get("preco_shopee"),
+            "lucro_shopee": sugeridos.get("lucro_shopee"),
+            "preco_temu": sugeridos.get("preco_temu"),
+            "lucro_temu": sugeridos.get("lucro_temu"),
+            "preco_tiktok": sugeridos.get("preco_tiktok"),
+            "lucro_tiktok": sugeridos.get("lucro_tiktok"),
+            "ean": produto.get("ean"),
+            "fabricante": produto.get("fabricante"),
+            "caixa_com": produto.get("caixa_com"),
+            "quantidade": produto.get("quantidade"),
+            "cor_cores": produto.get("cores") or produto.get("cor"),
+            "composicao": produto.get("composicao"),
+            "validade": produto.get("validade"),
+            "tamanho": produto.get("tamanho") or produto.get("tamanho_aproximado"),
+            "peso": produto.get("peso") or produto.get("peso_aproximado"),
+            "tipo": produto.get("tipo") or produto.get("tipo_de_produto"),
+            "caixa_master": produto.get("caixa_master"),
+            "link": produto.get("link"),
+            "imagem": produto.get("imagem"),
+        }
+        erros = client.insert_rows_json(TABLE_CAMPINEIRA, [row])
+        if erros:
+            return False, str(erros)[:300]
+        return True, None
+    except Exception as e:
+        return False, str(e)[:300]
+
+def registrar_evento_pipeline_bq(client, id_produto, sku_upseller, nome, categoria, etapa, status, mensagem):
+    """Grava um evento de etapa do pipeline de publicação (armazem/shopee/shein/temu/tiktok).
+    Modelo de log append-only (uma linha por evento) para não depender de UPDATE no BigQuery,
+    que não funciona em linhas ainda no buffer de streaming."""
+    if not client:
+        return False, "client BigQuery não conectado"
+    try:
+        row = {
+            "id_produto": id_produto,
+            "sku_upseller": sku_upseller,
+            "nome": nome,
+            "categoria": categoria,
+            "etapa": etapa,
+            "status": status,
+            "mensagem": (mensagem or "")[:500],
+            "data_evento": datetime.utcnow().isoformat(),
+        }
+        erros = client.insert_rows_json(TABLE_PIPELINE, [row])
+        if erros:
+            return False, str(erros)[:300]
+        return True, None
+    except Exception as e:
+        return False, str(e)[:300]
+
+def carregar_pipeline_bq(client):
+    """Lê o status consolidado (última etapa concluída de cada tipo) de cada produto
+    que já passou pelo menos pela etapa 'armazem'. Retorna dict indexado por id_produto."""
+    if not client:
+        return {}
+    try:
+        query = f"""
+            SELECT
+                id_produto,
+                ARRAY_AGG(sku_upseller ORDER BY data_evento DESC LIMIT 1)[OFFSET(0)] AS sku_upseller,
+                ARRAY_AGG(nome ORDER BY data_evento DESC LIMIT 1)[OFFSET(0)] AS nome,
+                ARRAY_AGG(categoria ORDER BY data_evento DESC LIMIT 1)[OFFSET(0)] AS categoria,
+                LOGICAL_OR(etapa = 'armazem' AND status = 'ok') AS armazem_ok,
+                LOGICAL_OR(etapa = 'shopee'  AND status = 'ok') AS shopee_ok,
+                LOGICAL_OR(etapa = 'shein'   AND status = 'ok') AS shein_ok,
+                LOGICAL_OR(etapa = 'temu'    AND status = 'ok') AS temu_ok,
+                LOGICAL_OR(etapa = 'tiktok'  AND status = 'ok') AS tiktok_ok
+            FROM `{TABLE_PIPELINE}`
+            GROUP BY id_produto
+            HAVING armazem_ok
+        """
+        df = client.query(query).to_dataframe()
+        resultado = {}
+        for _, r in df.iterrows():
+            resultado[r["id_produto"]] = {
+                "sku_upseller": r["sku_upseller"],
+                "nome": r["nome"],
+                "categoria": r["categoria"],
+                "armazem_ok": bool(r["armazem_ok"]),
+                "shopee_ok": bool(r["shopee_ok"]),
+                "shein_ok": bool(r["shein_ok"]),
+                "temu_ok": bool(r["temu_ok"]),
+                "tiktok_ok": bool(r["tiktok_ok"]),
+            }
+        return resultado
+    except Exception:
+        return {}
+
 def filtrar_resultados(dados, filtros_cat):
     resultado = []
     for p in dados:
@@ -166,7 +295,22 @@ def rodar_rpa_background(filtros_cat, cats_varrer=None, buscar_detalhes=False):
         import time
 
         inicio_dt = datetime.now()
-        salvar_status({"rodando": True, "progresso": "Iniciando...", 
+        id_captura = inicio_dt.strftime("%Y%m%d_%H%M%S")
+        bq_conn_erro = None
+        try:
+            client_bq_camp = conectar_bigquery_rpa()
+        except Exception as e:
+            client_bq_camp = None
+            bq_conn_erro = str(e)[:200]
+
+        progresso_inicial = "Iniciando..."
+        if not client_bq_camp:
+            progresso_inicial = (f"Iniciando... ⚠️ BigQuery indisponível "
+                                  f"({bq_conn_erro or 'conectar_bigquery() retornou None'}) "
+                                  f"— salvando apenas no JSON local.")
+        bq_erro_reportado = [False]
+
+        salvar_status({"rodando": True, "progresso": progresso_inicial,
                        "inicio": inicio_dt.strftime("%d/%m/%Y %H:%M:%S"),
                        "inicio_ts": inicio_dt.timestamp(),
                        "fim": None, "duracao": None})
@@ -339,7 +483,12 @@ def rodar_rpa_background(filtros_cat, cats_varrer=None, buscar_detalhes=False):
                                 p["imagem"] = detalhes.pop("imagem_produto")
                             elif "imagem_produto" in detalhes:
                                 detalhes.pop("imagem_produto")
-                            todos_produtos.append({**p, "categoria": nome_cat, **detalhes})
+                            produto_final = {**p, "categoria": nome_cat, **detalhes}
+                            todos_produtos.append(produto_final)
+                            ok_bq, erro_bq = registrar_produto_bq(client_bq_camp, id_captura, nome_cat, produto_final)
+                            if not ok_bq and not bq_erro_reportado[0]:
+                                bq_erro_reportado[0] = True
+                                atualizar(f"⚠️ Falha ao gravar no BigQuery: {erro_bq}")
 
                         # Próxima página
                         pag_links = driver.find_elements(By.CSS_SELECTOR, "ul.pagination a")
@@ -404,6 +553,14 @@ def rodar_rpa_background(filtros_cat, cats_varrer=None, buscar_detalhes=False):
 def pagina_campineira():
     st.markdown("## 🏭 Campineira — Varredura de Produtos")
     st.markdown("---")
+
+    # Conexão BigQuery para o pipeline de publicação (roda na thread principal do
+    # Streamlit — aqui é seguro usar a versão cacheada do LeMarketplace).
+    try:
+        from LeMarketplace import conectar_bigquery
+        client_bq_pipeline = conectar_bigquery()
+    except Exception:
+        client_bq_pipeline = None
 
     status = ler_status()
     resultados_brutos = ler_resultados()
@@ -788,13 +945,21 @@ def pagina_campineira():
                                     st.session_state[f"pub_{p.get('id')}"] = sucesso
                                     st.session_state[f"pub_msg_{p.get('id')}"] = msg
                                     # Salva SKU gerado para usar na etapa 2
+                                    sku_gerado = None
                                     if sucesso:
                                         import json, os
                                         f_sku = "upseller_sku_counter.json"
                                         if os.path.exists(f_sku):
                                             with open(f_sku) as f:
                                                 num = json.load(f).get("contador", 1)
-                                            st.session_state[f"pub_sku_{p.get('id')}"] = f"RJ-{num:05d}"
+                                            sku_gerado = f"RJ-{num:05d}"
+                                            st.session_state[f"pub_sku_{p.get('id')}"] = sku_gerado
+                                    # Grava a etapa Armazém no BigQuery — garante que o produto
+                                    # continue aparecendo em "Enviar para Lojas" mesmo após F5/cache limpo.
+                                    registrar_evento_pipeline_bq(
+                                        client_bq_pipeline, p.get('id'), sku_gerado, p.get('nome'),
+                                        p.get('categoria'), "armazem", "ok" if sucesso else "erro", msg
+                                    )
                                     st.rerun()
                         else:
                             st.button("🔒 Publicar", key=f"btn_pub_dis_{idx}", disabled=True,
@@ -823,15 +988,29 @@ def pagina_campineira():
         st.info("Produtos que passaram pela Etapa 1 (Publicar) ficam aqui para as etapas seguintes.")
         st.markdown("---")
 
-        # Lista produtos já publicados
+        # Lista produtos já publicados — combina session_state (atualização instantânea
+        # dentro da sessão atual) com o BigQuery (sobrevive a F5, cache limpo, nova sessão).
+        pipeline_bq = carregar_pipeline_bq(client_bq_pipeline)
+
         publicados = []
         for p in filtrar_resultados(resultados_brutos, st.session_state.get("campineira_filtros", {})):
             pid = p.get('id')
-            if st.session_state.get(f"pub_{pid}") and st.session_state.get(f"pub_sku_{pid}"):
-                publicados.append({
-                    **p,
-                    "sku_upseller": st.session_state.get(f"pub_sku_{pid}")
-                })
+            sku_sessao = st.session_state.get(f"pub_sku_{pid}")
+            reg_bq = pipeline_bq.get(pid)
+
+            if st.session_state.get(f"pub_{pid}") and sku_sessao:
+                publicados.append({**p, "sku_upseller": sku_sessao})
+            elif reg_bq and reg_bq.get("armazem_ok"):
+                sku_bq = reg_bq["sku_upseller"]
+                publicados.append({**p, "sku_upseller": sku_bq})
+                # Restaura na sessão o que já foi concluído, pra manter os
+                # botões de cada etapa (Shopee/Shein/Temu/TikTok) consistentes.
+                st.session_state.setdefault(f"pub_{pid}", True)
+                st.session_state.setdefault(f"pub_sku_{pid}", sku_bq)
+                st.session_state.setdefault(f"shopee_ok_{sku_bq}", reg_bq.get("shopee_ok", False))
+                st.session_state.setdefault(f"shein_ok_{sku_bq}", reg_bq.get("shein_ok", False))
+                st.session_state.setdefault(f"temu_ok_{sku_bq}", reg_bq.get("temu_ok", False))
+                st.session_state.setdefault(f"tiktok_ok_{sku_bq}", reg_bq.get("tiktok_ok", False))
 
         if not publicados:
             st.warning("Nenhum produto publicado ainda. Vá para a aba 🚀 Publicar primeiro.")
@@ -870,77 +1049,159 @@ def pagina_campineira():
 
                         if not st.session_state.get("ups_logado"):
                             st.warning("Faça login na aba 🚀 Publicar")
-
-                        # ── ETAPA 2: Copiar para Shopee ──────
-                        elif not etapa2_ok:
-                            if st.button("2️⃣ Enviar → Shopee", key=f"e2_{idx}", use_container_width=True, type="primary"):
-                                with st.spinner("Enviando para Shopee..."):
-                                    from modulo_upseller import etapa2_copiar_para_lojas
-                                    sucesso, msg = etapa2_copiar_para_lojas(driver, sku)
-                                    st.session_state[f"etapa2_{sku}"] = sucesso
-                                    if sucesso: st.success(msg)
-                                    else: st.error(msg)
-                                    st.rerun()
-
-                        # ── ETAPA 3: Rascunho Shopee ─────────
-                        elif not etapa3_ok:
-                            etapa3_aberto = st.session_state.get(f"etapa3_aberto_{sku}", False)
-                            if not etapa3_aberto:
-                                if st.button("3️⃣ Editar Rascunho Shopee", key=f"e3_{idx}", use_container_width=True, type="primary"):
-                                    with st.spinner("Abrindo rascunho Shopee..."):
-                                        from modulo_upseller import etapa3_editar_rascunho
-                                        sucesso, msg, cat = etapa3_editar_rascunho(driver, sku, nome)
-                                        if sucesso:
-                                            st.session_state[f"etapa3_aberto_{sku}"] = True
-                                            st.session_state[f"etapa3_cat_{sku}"] = cat
-                                        else: st.error(msg)
-                                        st.rerun()
-                            else:
-                                cat = st.session_state.get(f"etapa3_cat_{sku}", "")
-                                if cat: st.info(f"🤖 **{cat}**")
-                                if st.button("🚀 Preencher + Publicar Shopee", key=f"e3f_{idx}", use_container_width=True, type="primary"):
-                                    with st.spinner("Publicando na Shopee..."):
-                                        from modulo_upseller import preencher_rascunho_shopee, finalizar_rascunho
-                                        sucesso, msg = preencher_rascunho_shopee(driver, p, sku, cat)
-                                        if sucesso:
-                                            finalizar_rascunho(driver)
-                                            st.session_state[f"etapa3_{sku}"] = True
-                                            st.success("✅ Publicado na Shopee!")
-                                        else: st.error(msg)
-                                        st.rerun()
-
-                        # ── ETAPA 4: Migrar para Shein/Temu/TikTok ──
-                        elif not st.session_state.get(f"etapa4_{sku}"):
-                            if st.button("4️⃣ Migrar → Shein/Temu/TikTok", key=f"e4_{idx}", use_container_width=True, type="primary"):
-                                with st.spinner("Migrando anúncio..."):
-                                    from modulo_upseller import etapa4_migrar_para_lojas
-                                    sucesso, msg = etapa4_migrar_para_lojas(driver, sku)
-                                    st.session_state[f"etapa4_{sku}"] = sucesso
-                                    if sucesso: st.success(msg)
-                                    else: st.error(msg)
-                                    st.rerun()
-
-                        # ── ETAPA 5: Rascunhos por plataforma ──
                         else:
-                            plataformas_ok = st.session_state.get(f"plataformas_ok_{sku}", [])
-                            pendentes = [pl for pl in ["shein","temu","tiktok"] if pl not in plataformas_ok]
+                            # Log em tempo real
+                            log_key = f"log_{sku}"
+                            if log_key not in st.session_state:
+                                st.session_state[log_key] = []
 
-                            if pendentes:
-                                pl = pendentes[0]
-                                label_pl = {"shein":"Shein","temu":"Temu","tiktok":"TikTok"}[pl]
-                                if st.button(f"5️⃣ Publicar {label_pl}", key=f"e5_{pl}_{idx}", use_container_width=True, type="primary"):
-                                    with st.spinner(f"Publicando na {label_pl}..."):
-                                        from modulo_upseller import editar_rascunho_plataforma
-                                        sucesso, msg = editar_rascunho_plataforma(driver, sku, p, pl)
-                                        if sucesso:
-                                            ok_list = st.session_state.get(f"plataformas_ok_{sku}", [])
-                                            ok_list.append(pl)
-                                            st.session_state[f"plataformas_ok_{sku}"] = ok_list
-                                            st.success(msg)
-                                        else:
-                                            st.error(msg)
+                            def add_log(msg):
+                                st.session_state[log_key].append(msg)
+
+                            # Mostra log
+                            if st.session_state[log_key]:
+                                with st.expander("📋 Log", expanded=True):
+                                    for linha in st.session_state[log_key][-8:]:
+                                        st.caption(linha)
+
+                            st.markdown("**Publicar por plataforma:**")
+
+                            # ── SHOPEE ──────────────────────────────
+                            shopee_ok = st.session_state.get(f"shopee_ok_{sku}", False)
+                            col_s1, col_s2 = st.columns(2)
+                            with col_s1:
+                                if shopee_ok:
+                                    st.success("✅ Shopee")
+                                else:
+                                    if st.button("🟠 Shopee", key=f"shopee_{idx}", use_container_width=True):
+                                        st.session_state[f"shopee_running_{sku}"] = True
+                                        add_log("🟠 Iniciando Shopee...")
                                         st.rerun()
-                                if plataformas_ok:
-                                    st.caption(f"✅ Já publicado: {', '.join(plataformas_ok)}")
-                            else:
-                                st.success("🎉 Publicado em todas as plataformas!")
+                            with col_s2:
+                                if not shopee_ok and st.session_state.get(f"shopee_running_{sku}"):
+                                    from modulo_upseller import etapa2_copiar_para_lojas, etapa3_editar_rascunho, preencher_rascunho_shopee, finalizar_rascunho
+                                    add_log("→ Copiando para Shopee...")
+                                    ok2, msg2 = etapa2_copiar_para_lojas(driver, sku)
+                                    add_log(msg2)
+                                    msg_final = msg2
+                                    if ok2:
+                                        add_log("→ Abrindo rascunho...")
+                                        ok3, msg3, cat = etapa3_editar_rascunho(driver, sku, nome)
+                                        add_log(msg3)
+                                        msg_final = msg3
+                                        if ok3:
+                                            add_log("→ Preenchendo campos...")
+                                            ok4, msg4 = preencher_rascunho_shopee(driver, p, sku, cat)
+                                            add_log(msg4)
+                                            msg_final = msg4
+                                            if ok4:
+                                                add_log("→ Publicando...")
+                                                finalizar_rascunho(driver)
+                                                st.session_state[f"shopee_ok_{sku}"] = True
+                                                add_log("✅ Shopee publicado!")
+                                                msg_final = "✅ Shopee publicado!"
+                                    registrar_evento_pipeline_bq(
+                                        client_bq_pipeline, p.get('id'), sku, nome, p.get('categoria'),
+                                        "shopee", "ok" if st.session_state.get(f"shopee_ok_{sku}") else "erro", msg_final
+                                    )
+                                    st.session_state[f"shopee_running_{sku}"] = False
+                                    st.rerun()
+
+                            # ── SHEIN ────────────────────────────────
+                            shein_ok = st.session_state.get(f"shein_ok_{sku}", False)
+                            col_sh1, col_sh2 = st.columns(2)
+                            with col_sh1:
+                                if shein_ok:
+                                    st.success("✅ Shein")
+                                elif not shopee_ok:
+                                    st.button("💛 Shein", key=f"shein_{idx}", disabled=True, use_container_width=True, help="Publique na Shopee primeiro")
+                                else:
+                                    if st.button("💛 Shein", key=f"shein_{idx}", use_container_width=True):
+                                        st.session_state[f"shein_running_{sku}"] = True
+                                        add_log("💛 Iniciando Shein...")
+                                        st.rerun()
+                            with col_sh2:
+                                if not shein_ok and st.session_state.get(f"shein_running_{sku}"):
+                                    from modulo_upseller import etapa4_migrar_para_lojas, editar_rascunho_plataforma
+                                    add_log("→ Migrando anúncio...")
+                                    ok4, msg4 = etapa4_migrar_para_lojas(driver, sku)
+                                    add_log(msg4)
+                                    msg_final = msg4
+                                    if ok4:
+                                        add_log("→ Editando rascunho Shein...")
+                                        ok5, msg5 = editar_rascunho_plataforma(driver, sku, p, "shein")
+                                        add_log(msg5)
+                                        msg_final = msg5
+                                        if ok5:
+                                            st.session_state[f"shein_ok_{sku}"] = True
+                                            add_log("✅ Shein publicado!")
+                                            msg_final = "✅ Shein publicado!"
+                                    registrar_evento_pipeline_bq(
+                                        client_bq_pipeline, p.get('id'), sku, nome, p.get('categoria'),
+                                        "shein", "ok" if st.session_state.get(f"shein_ok_{sku}") else "erro", msg_final
+                                    )
+                                    st.session_state[f"shein_running_{sku}"] = False
+                                    st.rerun()
+
+                            # ── TEMU ────────────────────────────────
+                            temu_ok = st.session_state.get(f"temu_ok_{sku}", False)
+                            col_t1, _ = st.columns(2)
+                            with col_t1:
+                                if temu_ok:
+                                    st.success("✅ Temu")
+                                elif not shopee_ok:
+                                    st.button("🟡 Temu", key=f"temu_{idx}", disabled=True, use_container_width=True, help="Publique na Shopee primeiro")
+                                else:
+                                    if st.button("🟡 Temu", key=f"temu_{idx}", use_container_width=True):
+                                        st.session_state[f"temu_running_{sku}"] = True
+                                        add_log("🟡 Iniciando Temu...")
+                                        st.rerun()
+                            if not temu_ok and st.session_state.get(f"temu_running_{sku}"):
+                                from modulo_upseller import editar_rascunho_plataforma
+                                add_log("→ Editando rascunho Temu...")
+                                ok5, msg5 = editar_rascunho_plataforma(driver, sku, p, "temu")
+                                add_log(msg5)
+                                if ok5:
+                                    st.session_state[f"temu_ok_{sku}"] = True
+                                    add_log("✅ Temu publicado!")
+                                registrar_evento_pipeline_bq(
+                                    client_bq_pipeline, p.get('id'), sku, nome, p.get('categoria'),
+                                    "temu", "ok" if st.session_state.get(f"temu_ok_{sku}") else "erro", msg5
+                                )
+                                st.session_state[f"temu_running_{sku}"] = False
+                                st.rerun()
+
+                            # ── TIKTOK ──────────────────────────────
+                            tiktok_ok = st.session_state.get(f"tiktok_ok_{sku}", False)
+                            col_tk1, _ = st.columns(2)
+                            with col_tk1:
+                                if tiktok_ok:
+                                    st.success("✅ TikTok")
+                                elif not shopee_ok:
+                                    st.button("⚫ TikTok", key=f"tiktok_{idx}", disabled=True, use_container_width=True, help="Publique na Shopee primeiro")
+                                else:
+                                    if st.button("⚫ TikTok", key=f"tiktok_{idx}", use_container_width=True):
+                                        st.session_state[f"tiktok_running_{sku}"] = True
+                                        add_log("⚫ Iniciando TikTok...")
+                                        st.rerun()
+                            if not tiktok_ok and st.session_state.get(f"tiktok_running_{sku}"):
+                                from modulo_upseller import editar_rascunho_plataforma
+                                add_log("→ Editando rascunho TikTok...")
+                                ok5, msg5 = editar_rascunho_plataforma(driver, sku, p, "tiktok")
+                                add_log(msg5)
+                                if ok5:
+                                    st.session_state[f"tiktok_ok_{sku}"] = True
+                                    add_log("✅ TikTok publicado!")
+                                registrar_evento_pipeline_bq(
+                                    client_bq_pipeline, p.get('id'), sku, nome, p.get('categoria'),
+                                    "tiktok", "ok" if st.session_state.get(f"tiktok_ok_{sku}") else "erro", msg5
+                                )
+                                st.session_state[f"tiktok_running_{sku}"] = False
+                                st.rerun()
+
+                            # Status geral
+                            total_ok = sum([shopee_ok, shein_ok, temu_ok, tiktok_ok])
+                            if total_ok == 4:
+                                st.success("🎉 Publicado em todas!")
+                            elif total_ok > 0:
+                                st.caption(f"✅ {total_ok}/4 plataformas")

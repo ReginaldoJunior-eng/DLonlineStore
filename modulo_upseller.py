@@ -169,15 +169,32 @@ def criar_driver():
     opts.add_argument("--disable-dev-shm-usage")
     return webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=opts)
 
+# ── ESTADO GLOBAL (sobrevive a F5) ─────────────────────────────────────────────
+# st.session_state é resetado a cada F5 (nova sessão/websocket). Para manter o
+# Chrome logado mesmo com refresh, guardamos o driver num cache compartilhado
+# no processo do servidor, que só é perdido se o app/servidor reiniciar.
+
+@st.cache_resource
+def _ups_estado_global():
+    return {"driver": None, "logado": False}
+
 # ── WIDGET PRINCIPAL ──────────────────────────────────────────────────────────
 
 def widget_login_upseller():
     st.markdown("#### 🔐 Login Upseller")
 
+    estado_global = _ups_estado_global()
+
     for k, v in [("ups_etapa", 0), ("ups_driver", None),
                  ("ups_logado", False), ("ups_captcha_img", None), ("ups_captcha_ocr", "")]:
         if k not in st.session_state:
             st.session_state[k] = v
+
+    # Se já existe sessão logada compartilhada (sobreviveu a um F5), reaproveita
+    if estado_global["logado"] and estado_global["driver"] is not None and not st.session_state["ups_logado"]:
+        st.session_state["ups_driver"] = estado_global["driver"]
+        st.session_state["ups_logado"] = True
+        st.session_state["ups_etapa"] = 3
 
     # Força manter na aba Publicar via query param
     st.query_params["tab"] = "publicar"
@@ -201,6 +218,8 @@ def widget_login_upseller():
                             st.session_state["ups_driver"] = driver
                             st.session_state["ups_logado"] = True
                             st.session_state["ups_etapa"] = 3
+                            estado_global["driver"] = driver
+                            estado_global["logado"] = True
                             st.rerun()
                         else:
                             driver.quit()
@@ -296,6 +315,8 @@ def widget_login_upseller():
                             driver.minimize_window()
                             st.session_state["ups_logado"] = True
                             st.session_state["ups_etapa"] = 3
+                            estado_global["driver"] = driver
+                            estado_global["logado"] = True
                             st.rerun()
                         else:
                             st.error("❌ CAPTCHA incorreto.")
@@ -359,6 +380,8 @@ def widget_login_upseller():
                         driver.minimize_window()
                         st.session_state["ups_logado"] = True
                         st.session_state["ups_etapa"] = 3
+                        estado_global["driver"] = driver
+                        estado_global["logado"] = True
                         st.rerun()
                     else:
                         st.error("❌ Código inválido.")
@@ -369,7 +392,7 @@ def widget_login_upseller():
     # ── ETAPA 3: Logado ───────────────────────────────────────────
     if etapa == 3:
         st.success("✅ Upseller conectado! Chrome em background.")
-        st.caption("🍪 Sessão salva — próximo acesso será automático!")
+        st.caption("🍪 Sessão salva — sobrevive a F5 e volta automático no próximo acesso!")
         c1, c2 = st.columns(2)
         with c1:
             if st.button("🚪 Desconectar", use_container_width=True):
@@ -379,6 +402,8 @@ def widget_login_upseller():
                 st.session_state["ups_driver"] = None
                 st.session_state["ups_logado"] = False
                 st.session_state["ups_etapa"] = 0
+                estado_global["driver"] = None
+                estado_global["logado"] = False
                 st.rerun()
         with c2:
             if st.button("🗑️ Limpar sessão salva", use_container_width=True):
