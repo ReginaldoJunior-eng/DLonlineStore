@@ -163,10 +163,23 @@ def criar_driver():
     from selenium import webdriver
     from selenium.webdriver.chrome.service import Service
     from selenium.webdriver.chrome.options import Options
-    from webdriver_manager.chrome import ChromeDriverManager
     opts = Options()
     opts.add_argument("--no-sandbox")
     opts.add_argument("--disable-dev-shm-usage")
+
+    # Ativa headless só quando st.secrets["headless"] = true (configurado na nuvem,
+    # ausente/false local) — mantém o Chrome VISÍVEL localmente (de propósito, pra
+    # dar pra acompanhar onde trava), e usa o Chromium instalado via packages.txt no
+    # Streamlit Cloud (não o webdriver_manager, que tenta casar versão do "Google
+    # Chrome" e não bate certo com o Chromium do Debian).
+    if st.secrets.get("headless", False):
+        opts.add_argument("--headless=new")
+        opts.add_argument("--disable-gpu")
+        opts.add_argument("--window-size=1920,1080")
+        opts.binary_location = "/usr/bin/chromium"
+        return webdriver.Chrome(service=Service("/usr/bin/chromedriver"), options=opts)
+
+    from webdriver_manager.chrome import ChromeDriverManager
     return webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=opts)
 
 def driver_esta_vivo(driver):
