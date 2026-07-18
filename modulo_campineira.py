@@ -14,47 +14,19 @@
 #
 #    elif st.session_state.pg == "Campineira":
 #        from modulo_campineira import pagina_campineira
-#        pagina_campineira()
+#        pagina_campineira(client_bq)   # reaproveita a conexão BigQuery já aberta
 #
 # =============================================================================
 
 import streamlit as st
+import re
 
-# Importa calculadora do LeMarketplace
-try:
-    from LeMarketplace import calcular_venda_completo, converter_custo_seguro
-except:
-    # Fallback caso não consiga importar
-    def converter_custo_seguro(valor_raw):
-        if valor_raw is None or valor_raw == "": return 0.0
-        if isinstance(valor_raw, (int, float)): return float(valor_raw)
-        s = str(valor_raw).replace('R$','').replace(' ','').strip()
-        try:
-            if ',' in s and '.' in s:
-                if s.find('.') < s.find(','): s = s.replace('.','').replace(',','.')
-                else: s = s.replace(',','')
-            elif ',' in s: s = s.replace(',','.')
-            return float(s)
-        except: return 0.0
-
-    def calcular_venda_completo(custo_aquisicao, margem_percentual, mkt):
-        imposto_tax = 0.06
-        margem_alvo = margem_percentual / 100
-        custo_embalagem = 1.00
-        if mkt == "shein":
-            comissao_mkt, taxa_fixa = 0.18, 5.0
-        elif mkt == "shopee":
-            comissao_mkt, taxa_fixa = 0.20, 4.0
-        elif mkt == "temu":
-            comissao_mkt, taxa_fixa = 0.0, 0.0
-        elif mkt == "tiktok":
-            comissao_mkt, taxa_fixa = 0.22, 4.0
-        else:
-            return 0, 0
-        divisor = 1 - (comissao_mkt + imposto_tax + margem_alvo)
-        preco = (custo_aquisicao + custo_embalagem + taxa_fixa) / divisor if divisor > 0 else 0
-        lucro = preco - (preco * comissao_mkt) - (preco * imposto_tax) - custo_aquisicao - custo_embalagem - taxa_fixa
-        return preco, lucro
+# Cálculo de preço/lucro fica num módulo neutro compartilhado com LeMarketplace.py —
+# NUNCA importar de "LeMarketplace" diretamente aqui: é o script principal rodado
+# pelo Streamlit, e importar dele re-executa o arquivo inteiro (sidebar, botões,
+# tudo) como efeito colateral, causando erro de "multiple button elements with the
+# same auto-generated ID" (e a sidebar/cabeçalho aparecendo duplicados na tela).
+from calculos_marketplace import calcular_venda_completo, converter_custo_seguro
 import pandas as pd
 import json
 import os
@@ -102,8 +74,12 @@ CATEGORIAS = [
 
 ARQUIVO_RESULTADOS = "campineira_resultados.json"
 ARQUIVO_STATUS     = "campineira_status.json"
+ARQUIVO_EXCLUIDOS  = "campineira_excluidos.json"
 TABLE_CAMPINEIRA   = "leandro-marketplace.DL_Store_Online.tb_resultado_produtos_campineira"
 TABLE_PIPELINE     = "leandro-marketplace.DL_Store_Online.tb_pipeline_publicacao_campineira"
+TABLE_SKU_REGISTRO = "leandro-marketplace.DL_Store_Online.tb_sku_registrados"
+TABLE_HISTORICO    = "leandro-marketplace.DL_Store_Online.tb_historico_produtos_campineira"
+TABLE_HISTORICO_STAGE = "leandro-marketplace.DL_Store_Online.tb_stage_historico_campineira"
 
 # ============================================================
 # FUNÇÕES AUXILIARES
@@ -124,6 +100,45 @@ def ler_resultados() -> list:
         return []
     with open(ARQUIVO_RESULTADOS, encoding="utf-8") as f:
         return json.load(f)
+
+def carregar_excluidos() -> set:
+    """Carrega os produtos removidos manualmente da fila de publicação. Fica num
+    arquivo local (não só em st.session_state) porque session_state é perdido a
+    cada reinício do Streamlit — sem persistir em arquivo, um item removido
+    "voltava sozinho" depois de qualquer restart."""
+    if not os.path.exists(ARQUIVO_EXCLUIDOS):
+        return set()
+    try:
+        with open(ARQUIVO_EXCLUIDOS, encoding="utf-8") as f:
+            return set(json.load(f))
+    except Exception:
+        return set()
+
+def salvar_excluidos(excluidos: set):
+    try:
+        with open(ARQUIVO_EXCLUIDOS, "w", encoding="utf-8") as f:
+            json.dump(list(excluidos), f, ensure_ascii=False)
+    except Exception:
+        pass
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def carregar_imagem_bytes(url):
+    """Baixa a imagem com o header Referer que a Campineira exige antes de mostrar
+    no Streamlit. st.image(url) direto deixa o NAVEGADOR buscar a imagem, sem esse
+    header — a Campineira bloqueia esse acesso (proteção contra hotlink) e a
+    miniatura aparece quebrada mesmo com a URL certa. Cacheado por 1h pra não
+    rebaixar a mesma imagem a cada rerun da tela."""
+    if not url:
+        return None
+    try:
+        import requests
+        headers = {"User-Agent": "Mozilla/5.0", "Referer": "https://campineira.com.br/"}
+        resp = requests.get(url, headers=headers, timeout=8)
+        if resp.status_code == 200:
+            return resp.content
+        return None
+    except Exception:
+        return None
 
 MARGEM_PADRAO = 15.0
 
@@ -148,6 +163,162 @@ def conectar_bigquery_rpa():
     info = st.secrets["gcp_service_account"]
     creds = service_account.Credentials.from_service_account_info(info)
     return bigquery.Client(credentials=creds, project=info["project_id"])
+
+def checar_ean_duplicado_bq(client, ean):
+    """Verifica se esse EAN já foi usado num SKU publicado antes — evita mandar pro
+    Upseller um cadastro que vai ser recusado com 'código de barra já existe' (erro
+    detectado tarde demais, depois de já ter tentado publicar). Retorna o SKU já
+    registrado com esse EAN, ou None se não achou nenhum (ou client indisponível —
+    nesse caso não bloqueia, só não valida)."""
+    if not client or not ean:
+        return None
+    try:
+        query = f"""
+            SELECT sku FROM `{TABLE_SKU_REGISTRO}`
+            WHERE ean = @ean
+            ORDER BY data_criacao DESC
+            LIMIT 1
+        """
+        job_config = bigquery.QueryJobConfig(
+            query_parameters=[bigquery.ScalarQueryParameter("ean", "STRING", str(ean))]
+        )
+        resultado = list(client.query(query, job_config=job_config).result())
+        return resultado[0]["sku"] if resultado else None
+    except Exception:
+        return None
+
+def registrar_sku_bq(client, sku, ean, id_produto, nome):
+    """Registra um SKU recém-criado (Armazém publicado com sucesso) na tabela de
+    controle — usada depois pra checar_ean_duplicado_bq() detectar repetição antes
+    de tentar publicar de novo. Retorna (sucesso, erro)."""
+    if not client:
+        return False, "client BigQuery não conectado"
+    try:
+        row = {
+            "sku": sku,
+            "ean": str(ean) if ean else None,
+            "id_produto": id_produto,
+            "nome": nome,
+            "data_criacao": datetime.utcnow().isoformat(),
+        }
+        erros = client.insert_rows_json(TABLE_SKU_REGISTRO, [row])
+        if erros:
+            return False, str(erros)[:300]
+        return True, None
+    except Exception as e:
+        return False, str(e)[:300]
+
+def atualizar_historico_bq(client, produtos):
+    """Registra/atualiza o histórico PERMANENTE de produtos lidos da Campineira —
+    diferente do 'Resultados' (que é só a foto da última varredura), esse histórico
+    nunca é sobrescrito. Cada produto só tem estoque/preço ATUALIZADOS se algo
+    realmente mudou desde a última leitura; senão fica intocado. Produto novo entra
+    como linha nova. O SKU (quando publicado) nunca é tocado por essa função — só
+    por marcar_sku_historico_bq(), então sobrevive de varredura em varredura.
+
+    Usa uma tabela de staging (sobrescrita a cada chamada, WRITE_TRUNCATE) + um
+    único MERGE pra cuidar de tudo de uma vez, em vez de 1 query por produto —
+    importante já que a lista só tende a crescer com o tempo.
+    Retorna (sucesso, erro)."""
+    if not client or not produtos:
+        return False, "client BigQuery não conectado ou lista vazia"
+    try:
+        import pandas as pd
+        linhas = []
+        for p in produtos:
+            preco_str = p.get("preco") or "R$ 0"
+            try:
+                preco_num = float(preco_str.replace("R$", "").replace(".", "").replace(",", ".").strip())
+            except Exception:
+                preco_num = 0.0
+            if not p.get("id"):
+                continue
+            linhas.append({
+                "id_produto": str(p.get("id")),
+                "categoria": p.get("categoria"),
+                "nome": p.get("nome"),
+                "estoque": int(p.get("estoque") or 0),
+                "preco": preco_str,
+                "preco_num": preco_num,
+                "ean": p.get("ean"),
+                "fabricante": p.get("fabricante"),
+                "imagem": p.get("imagem"),
+                "link": p.get("link"),
+            })
+        if not linhas:
+            return False, "nenhum produto com id válido"
+
+        df_stage = pd.DataFrame(linhas)
+        job_config = bigquery.LoadJobConfig(write_disposition="WRITE_TRUNCATE")
+        client.load_table_from_dataframe(df_stage, TABLE_HISTORICO_STAGE, job_config=job_config).result()
+
+        merge_sql = f"""
+            MERGE `{TABLE_HISTORICO}` T
+            USING `{TABLE_HISTORICO_STAGE}` S
+            ON T.id_produto = S.id_produto
+            WHEN MATCHED AND (T.estoque != S.estoque OR T.preco_num != S.preco_num) THEN
+              UPDATE SET
+                estoque = S.estoque,
+                preco = S.preco,
+                preco_num = S.preco_num,
+                nome = S.nome,
+                imagem = S.imagem,
+                data_ultima_leitura = CURRENT_TIMESTAMP(),
+                data_ultima_atualizacao = CURRENT_TIMESTAMP()
+            WHEN MATCHED THEN
+              UPDATE SET data_ultima_leitura = CURRENT_TIMESTAMP()
+            WHEN NOT MATCHED THEN
+              INSERT (id_produto, categoria, nome, estoque, preco, preco_num, ean, fabricante, imagem, link,
+                      sku_upseller, data_primeira_leitura, data_ultima_leitura, data_ultima_atualizacao)
+              VALUES (S.id_produto, S.categoria, S.nome, S.estoque, S.preco, S.preco_num, S.ean, S.fabricante,
+                      S.imagem, S.link, NULL, CURRENT_TIMESTAMP(), CURRENT_TIMESTAMP(), CURRENT_TIMESTAMP())
+        """
+        client.query(merge_sql).result()
+        return True, None
+    except Exception as e:
+        return False, str(e)[:300]
+
+def marcar_sku_historico_bq(client, id_produto, sku):
+    """Grava o SKU no histórico assim que o produto é publicado no Armazém — fica
+    ali até a próxima varredura reler esse mesmo produto (que pode ou não mudar
+    estoque/preço, mas nunca mexe no SKU). Retorna (sucesso, erro)."""
+    if not client or not sku or not id_produto:
+        return False, "client BigQuery não conectado, SKU ou id vazio"
+    try:
+        query = f"""
+            UPDATE `{TABLE_HISTORICO}`
+            SET sku_upseller = @sku
+            WHERE id_produto = @id_produto
+        """
+        job_config = bigquery.QueryJobConfig(query_parameters=[
+            bigquery.ScalarQueryParameter("sku", "STRING", sku),
+            bigquery.ScalarQueryParameter("id_produto", "STRING", str(id_produto)),
+        ])
+        client.query(query, job_config=job_config).result()
+        return True, None
+    except Exception as e:
+        return False, str(e)[:300]
+
+def registrar_produto_em_tb_produtos(client, sku, nome, custo):
+    """Registra o produto recém-publicado no Armazém em `tb_produtos` — a mesma
+    tabela que a aba Cadastro do LeMarketplace preenche manualmente. Cria uma linha
+    por marketplace (shein/shopee/temu/tiktok), todas com o mesmo SKU do Upseller,
+    pra esse produto virar rastreável no restante do sistema (preços, estoque,
+    vendas) sem precisar cadastrar ele de novo à mão. Retorna (sucesso, erro)."""
+    if not client:
+        return False, "client BigQuery não conectado"
+    try:
+        import pandas as pd
+        table_id = "leandro-marketplace.DL_Store_Online.tb_produtos"
+        lote = [
+            {"marketplace": mkt, "sku": sku, "produto": nome, "custo_aquisicao": float(custo or 0)}
+            for mkt in ["shein", "shopee", "temu", "tiktok"]
+        ]
+        df_lote = pd.DataFrame(lote)
+        client.load_table_from_dataframe(df_lote, table_id).result()
+        return True, None
+    except Exception as e:
+        return False, str(e)[:300]
 
 def registrar_produto_bq(client, id_captura, categoria, produto):
     """Grava o produto capturado na tb_resultado_produtos_campineira assim que é extraído,
@@ -264,6 +435,134 @@ def carregar_pipeline_bq(client):
     except Exception:
         return {}
 
+def listar_produtos_imagem_pendente(client, apenas_com_erro=False):
+    """Lista produtos já publicados no Armazém pra permitir reprocessar a imagem.
+    Por padrão lista TODOS os publicados — um upload pode "dar certo" (sem erro
+    registrado) mas subir a imagem errada (ex: um selo/badge do site de origem em
+    vez da foto real), então não dá pra confiar só em quem teve erro registrado.
+    Se apenas_com_erro=True, filtra só quem teve aviso de imagem na mensagem.
+    Retorna dicts com sku_upseller, id_produto, nome, mensagem e a URL da imagem
+    (buscada na captura mais recente da Campineira)."""
+    if not client:
+        return []
+    try:
+        filtro_erro = "AND mensagem LIKE '%Imagem:%'" if apenas_com_erro else ""
+        q1 = f"""
+            SELECT sku_upseller, id_produto, nome, mensagem
+            FROM `{TABLE_PIPELINE}`
+            WHERE etapa = 'armazem' AND status = 'ok' {filtro_erro}
+            QUALIFY ROW_NUMBER() OVER (PARTITION BY sku_upseller ORDER BY data_evento DESC) = 1
+        """
+        df1 = client.query(q1).to_dataframe()
+        if df1.empty:
+            return []
+
+        resultado = []
+        for _, r in df1.iterrows():
+            imagem = None
+            try:
+                q2 = f"""
+                    SELECT imagem FROM `{TABLE_CAMPINEIRA}`
+                    WHERE id_produto = @id_produto
+                    ORDER BY data_captura DESC LIMIT 1
+                """
+                job_config = bigquery.QueryJobConfig(
+                    query_parameters=[bigquery.ScalarQueryParameter("id_produto", "STRING", r["id_produto"])]
+                )
+                df2 = client.query(q2, job_config=job_config).to_dataframe()
+                if not df2.empty:
+                    imagem = df2.iloc[0]["imagem"]
+            except Exception:
+                pass
+            resultado.append({
+                "sku_upseller": r["sku_upseller"],
+                "id_produto": r["id_produto"],
+                "nome": r["nome"],
+                "mensagem": r["mensagem"],
+                "imagem": imagem,
+            })
+        return resultado
+    except Exception:
+        return []
+
+def listar_produtos_armazem_com_erro(client):
+    """Lista produtos cuja ÚLTIMA tentativa de publicar no Armazém (Etapa 1) falhou
+    — ou seja, nunca chegaram a ser criados de fato. Reconstrói o dict completo do
+    produto a partir da captura mais recente da Campineira, pra dar pra tentar
+    publicar de novo do zero (gera um SKU novo, já que o anterior nunca foi salvo)."""
+    if not client:
+        return []
+    try:
+        q1 = f"""
+            SELECT id_produto, nome, categoria, mensagem, status
+            FROM `{TABLE_PIPELINE}`
+            WHERE etapa = 'armazem'
+            QUALIFY ROW_NUMBER() OVER (PARTITION BY id_produto ORDER BY data_evento DESC) = 1
+        """
+        df1 = client.query(q1).to_dataframe()
+        if df1.empty:
+            return []
+        df1 = df1[df1["status"] == "erro"]
+        if df1.empty:
+            return []
+
+        resultado = []
+        for _, r in df1.iterrows():
+            produto_completo = None
+            try:
+                q2 = f"""
+                    SELECT * FROM `{TABLE_CAMPINEIRA}`
+                    WHERE id_produto = @id_produto
+                    ORDER BY data_captura DESC LIMIT 1
+                """
+                job_config = bigquery.QueryJobConfig(
+                    query_parameters=[bigquery.ScalarQueryParameter("id_produto", "STRING", r["id_produto"])]
+                )
+                df2 = client.query(q2, job_config=job_config).to_dataframe()
+                if not df2.empty:
+                    cap = df2.iloc[0].to_dict()
+                    produto_completo = {
+                        "id": r["id_produto"],
+                        "nome": cap.get("nome") or r["nome"],
+                        "categoria": cap.get("categoria") or r["categoria"],
+                        "ean": cap.get("ean"),
+                        "fabricante": cap.get("fabricante"),
+                        "caixa_com": cap.get("caixa_com"),
+                        "quantidade": cap.get("quantidade"),
+                        "cores": cap.get("cor_cores"),
+                        "composicao": cap.get("composicao"),
+                        "validade": cap.get("validade"),
+                        "tamanho": cap.get("tamanho"),
+                        "peso": cap.get("peso"),
+                        "tipo": cap.get("tipo"),
+                        "caixa_master": cap.get("caixa_master"),
+                        "link": cap.get("link"),
+                        "imagem": cap.get("imagem"),
+                    }
+            except Exception:
+                pass
+            resultado.append({
+                "id_produto": r["id_produto"],
+                "nome": r["nome"],
+                "categoria": r["categoria"],
+                "mensagem": r["mensagem"],
+                "produto": produto_completo,
+            })
+        return resultado
+    except Exception:
+        return []
+
+def imagem_parece_valida(url):
+    """Verifica se a URL de imagem segue o padrão real de foto de produto da
+    Campineira (.../Imagens/produtos/##/foto######.jpg) — confirmado em várias
+    capturas certas. Ícones de tamanho, selos e logos do site têm outro padrão
+    de pasta/nome (ex: /Imagens/icones/icone_0157.jpg, images/Logo25AnosMenor.png)
+    e às vezes acabam capturados por engano no lugar da foto real. Em vez de só
+    checar se tem alguma URL, valida o padrão pra pegar essas capturas erradas."""
+    if not url:
+        return False
+    return bool(re.search(r'/produtos/\d+/foto\d+\.\w+', url, re.IGNORECASE))
+
 def filtrar_resultados(dados, filtros_cat):
     resultado = []
     for p in dados:
@@ -278,6 +577,14 @@ def filtrar_resultados(dados, filtros_cat):
         if est >= cfg["estoque_min"] and preco_num >= cfg["preco_min"]:
             sugeridos = calcular_precos_sugeridos(preco_str)
             resultado.append({**p, "preco_num": preco_num, **sugeridos})
+
+    # Ordena do maior pro menor lucro — usa o melhor lucro entre as 4 plataformas
+    # de cada produto. Como Resultados, Galeria e Publicar usam essa mesma função,
+    # a ordenação vale nas três telas de uma vez.
+    resultado.sort(
+        key=lambda p: max((p.get(f"lucro_{m}") or 0) for m in ["shein", "shopee", "temu", "tiktok"]),
+        reverse=True
+    )
     return resultado
 
 # ============================================================
@@ -309,6 +616,23 @@ def rodar_rpa_background(filtros_cat, cats_varrer=None, buscar_detalhes=False):
                                   f"({bq_conn_erro or 'conectar_bigquery() retornou None'}) "
                                   f"— salvando apenas no JSON local.")
         bq_erro_reportado = [False]
+
+        # IDs já publicados no Armazém — pulamos esses na captura pra não ficar
+        # reprocessando/re-adicionando na fila quem já foi publicado. Produtos
+        # ainda não publicados continuam sendo recapturados normalmente (atualiza
+        # preço, estoque, imagem etc.). Pra corrigir dado de algo já publicado,
+        # usa os botões "Reprocessar" na aba Publicar, não a varredura.
+        ids_ja_publicados = set()
+        if client_bq_camp:
+            try:
+                q_publicados = f"""
+                    SELECT DISTINCT id_produto FROM `{TABLE_PIPELINE}`
+                    WHERE etapa = 'armazem' AND status = 'ok'
+                """
+                df_publicados = client_bq_camp.query(q_publicados).to_dataframe()
+                ids_ja_publicados = set(df_publicados["id_produto"].tolist())
+            except Exception:
+                ids_ja_publicados = set()
 
         salvar_status({"rodando": True, "progresso": progresso_inicial,
                        "inicio": inicio_dt.strftime("%d/%m/%Y %H:%M:%S"),
@@ -373,8 +697,24 @@ def rodar_rpa_background(filtros_cat, cats_varrer=None, buscar_detalhes=False):
                 var linkElem = box.querySelector('a');
                 var linkHref = linkElem ? linkElem.getAttribute('href') : null;
                 var link = linkHref ? 'https://campineira.com.br/' + linkHref : null;
-                var imgElem = box.querySelector('img');
-                var imagem = imgElem ? imgElem.getAttribute('src') : null;
+                // A foto REAL do produto fica dentro de um <figure> (confirmado no
+                // HTML do site: <div class="box-interno"><figure><img class="img-
+                // responsive" src=".../foto####.jpg">). O card também tem OUTROS <img
+                // class="img-responsive img_icone"> (ícones de tamanho, ex: title=
+                // "Tamanho Médio", src=".../icones/icone_0157.jpg") que casam com
+                // seletores genéricos de ".img-responsive" — excluído via :not(.img_icone).
+                var naoIcone = ':not(.img_icone):not([src*="Imagens/icones"])';
+                var imgElem = box.querySelector('figure img.img-responsive' + naoIcone) || box.querySelector('figure img' + naoIcone) || box.querySelector('.box-interno img' + naoIcone) || box.querySelector('img.img-responsive' + naoIcone) || box.querySelector('img' + naoIcone);
+                // Sites com lazy loading mostram um placeholder genérico no atributo
+                // "src" até a imagem real carregar — a URL de verdade fica guardada
+                // num atributo "data-*" enquanto isso. Prioriza esses antes do src puro.
+                var imagem = imgElem ? (
+                    imgElem.getAttribute('data-src') ||
+                    imgElem.getAttribute('data-lazy-src') ||
+                    imgElem.getAttribute('data-original') ||
+                    imgElem.getAttribute('data-lazy') ||
+                    imgElem.getAttribute('src')
+                ) : null;
                 var form = null;
                 var allForms = document.querySelectorAll('form');
                 for (var j = 0; j < allForms.length; j++) {
@@ -484,6 +824,13 @@ def rodar_rpa_background(filtros_cat, cats_varrer=None, buscar_detalhes=False):
                             elif "imagem_produto" in detalhes:
                                 detalhes.pop("imagem_produto")
                             produto_final = {**p, "categoria": nome_cat, **detalhes}
+
+                            # Pula produtos já publicados no Armazém — evita reprocessar/
+                            # readicionar na fila quem já foi publicado (pra corrigir dados
+                            # de um já publicado, usa "Reprocessar" na aba Publicar).
+                            if produto_final.get("id") in ids_ja_publicados:
+                                continue
+
                             todos_produtos.append(produto_final)
                             ok_bq, erro_bq = registrar_produto_bq(client_bq_camp, id_captura, nome_cat, produto_final)
                             if not ok_bq and not bq_erro_reportado[0]:
@@ -514,9 +861,16 @@ def rodar_rpa_background(filtros_cat, cats_varrer=None, buscar_detalhes=False):
                 except Exception as e:
                     atualizar(f"[{idx+1}/{len(categorias)}] ERRO em {nome_cat}: {str(e)[:50]}")
 
-            # SALVA RESULTADOS
+            # SALVA RESULTADOS (só a foto da última varredura — "Resultados" continua assim)
             with open(ARQUIVO_RESULTADOS, "w", encoding="utf-8") as f:
                 json.dump(todos_produtos, f, ensure_ascii=False)
+
+            # Alimenta o histórico PERMANENTE (nunca sobrescrito) — atualiza estoque/
+            # preço só de quem mudou, mantém o resto intocado, preserva SKU já publicado.
+            if todos_produtos:
+                ok_hist, erro_hist = atualizar_historico_bq(client_bq_camp, todos_produtos)
+                if not ok_hist:
+                    atualizar(f"⚠️ Falha ao atualizar histórico no BigQuery: {erro_hist}")
 
             fim_dt = datetime.now()
             st_atual = ler_status()
@@ -547,29 +901,325 @@ def rodar_rpa_background(filtros_cat, cats_varrer=None, buscar_detalhes=False):
         })
 
 # ============================================================
+# EXECUÇÃO DO PIPELINE DE PUBLICAÇÃO (Shopee/Shein/Temu/TikTok)
+# ============================================================
+# Funções de módulo (não fechadas sobre nada) — reutilizadas tanto pelos botões
+# individuais quanto pelo botão "Todas as Lojas". Sem depender de a Shopee ter
+# sido clicada manualmente antes: cada uma garante os pré-requisitos sozinha.
+
+def _msg_parou(msg_final, driver_atual):
+    """Monta uma mensagem de parada explícita, checando se o rascunho ainda está
+    aberto na tela (confirmando que nada foi publicado)."""
+    from modulo_upseller import pagina_rascunho_ainda_aberta
+    ainda_aberta = pagina_rascunho_ainda_aberta(driver_atual)
+    if ainda_aberta is True:
+        return f"{msg_final} — página do rascunho ainda aberta, nada foi publicado."
+    elif ainda_aberta is False:
+        return f"{msg_final} — saiu da tela do rascunho, mas não há confirmação de publicação."
+    return msg_final
+
+def _rodar_shopee(driver, p, sku, nome, client_bq_pipeline, add_log):
+    """Roda o fluxo completo da Shopee (copiar do Armazém → abrir rascunho →
+    preencher → publicar). Se já estiver ok, não faz nada. Retorna True/False."""
+    if st.session_state.get(f"shopee_ok_{sku}"):
+        return True
+    from modulo_upseller import etapa2_copiar_para_lojas, etapa3_editar_rascunho, preencher_rascunho_shopee, finalizar_rascunho
+    add_log("🟠 Copiando para Shopee...")
+    ok2, msg2 = etapa2_copiar_para_lojas(driver, sku)
+    add_log(msg2)
+    msg_final = msg2
+    if ok2:
+        add_log("→ Abrindo rascunho...")
+        ok3, msg3, cat = etapa3_editar_rascunho(driver, sku, nome)
+        add_log(msg3)
+        msg_final = msg3
+        if ok3:
+            add_log("→ Preenchendo campos...")
+            ok4, msg4 = preencher_rascunho_shopee(driver, p, sku, cat)
+            add_log(msg4)
+            msg_final = msg4
+            if ok4:
+                add_log("→ Publicando...")
+                finalizar_rascunho(driver)
+                st.session_state[f"shopee_ok_{sku}"] = True
+                add_log("✅ Shopee publicado!")
+                msg_final = "✅ Shopee publicado!"
+    if not st.session_state.get(f"shopee_ok_{sku}"):
+        msg_final = _msg_parou(msg_final, driver)
+        st.session_state["shopee_erro_" + sku] = msg_final
+        add_log(f"⛔ Automação parou: {msg_final}")
+    registrar_evento_pipeline_bq(
+        client_bq_pipeline, p.get('id'), sku, nome, p.get('categoria'),
+        "shopee", "ok" if st.session_state.get(f"shopee_ok_{sku}") else "erro", msg_final
+    )
+    return st.session_state.get(f"shopee_ok_{sku}", False)
+
+def _rodar_migracao(driver, p, sku, nome, client_bq_pipeline, add_log):
+    """Roda 'Copiar para Lojas' a partir do anúncio JÁ PUBLICADO na Shopee (marca
+    Shein+Temu+TikTok de uma vez só) — UMA ÚNICA VEZ por produto, reaproveitado
+    pelos 3 botões. Retorna True/False."""
+    if st.session_state.get(f"migracao_ok_{sku}"):
+        return True
+    from modulo_upseller import etapa4_migrar_para_lojas
+    add_log("📋 Copiando anúncio da Shopee para Shein/Temu/TikTok...")
+    ok4, msg4 = etapa4_migrar_para_lojas(driver, sku)
+    add_log(msg4)
+    st.session_state[f"migracao_ok_{sku}"] = ok4
+    if not ok4:
+        msg4 = _msg_parou(msg4, driver)
+        st.session_state[f"migracao_erro_{sku}"] = msg4
+        add_log(f"⛔ Cópia para as lojas parou: {msg4}")
+    registrar_evento_pipeline_bq(
+        client_bq_pipeline, p.get('id'), sku, nome, p.get('categoria'),
+        "migracao", "ok" if ok4 else "erro", msg4
+    )
+    return ok4
+
+def _rodar_loja(driver, p, sku, nome, client_bq_pipeline, add_log, plataforma):
+    """Roda o fluxo completo de UMA loja (Shein/Temu/TikTok): garante que a Shopee
+    já publicou, garante que a cópia (migração a partir da Shopee) já rodou, e só
+    então preenche+publica o rascunho dessa loja. Chamado tanto pelo botão
+    individual quanto pelo "Todas as Lojas"."""
+    ok_key = f"{plataforma}_ok_{sku}"
+    if st.session_state.get(ok_key):
+        return True
+
+    if not _rodar_shopee(driver, p, sku, nome, client_bq_pipeline, add_log):
+        return False
+    if not _rodar_migracao(driver, p, sku, nome, client_bq_pipeline, add_log):
+        return False
+
+    from modulo_upseller import editar_rascunho_plataforma
+    add_log(f"→ Editando rascunho {plataforma.title()}...")
+    ok5, msg5 = editar_rascunho_plataforma(driver, sku, p, plataforma)
+    add_log(msg5)
+    if ok5:
+        st.session_state[ok_key] = True
+        add_log(f"✅ {plataforma.title()} publicado!")
+        msg5 = f"✅ {plataforma.title()} publicado!"
+    else:
+        msg5 = _msg_parou(msg5, driver)
+        st.session_state[f"{plataforma}_erro_{sku}"] = msg5
+        add_log(f"⛔ Automação parou: {msg5}")
+    registrar_evento_pipeline_bq(
+        client_bq_pipeline, p.get('id'), sku, nome, p.get('categoria'),
+        plataforma, "ok" if st.session_state.get(ok_key) else "erro", msg5
+    )
+    return st.session_state.get(ok_key, False)
+
+# ============================================================
+# CARD DE PUBLICAÇÃO POR LOJA (Shopee/Shein/Temu/TikTok)
+# ============================================================
+
+def renderizar_card_publicacao(p, key_suffix, client_bq_pipeline):
+    """Card com status das etapas e botões de publicação por loja para um produto que já
+    está no Armazém do Upseller. Reutilizado tanto pela lista de produtos publicados na
+    sessão (aba Enviar para Lojas) quanto pela busca independente por SKU."""
+    sku = p.get("sku_upseller", "")
+    nome = p.get("nome", "")
+    etapa2_ok = st.session_state.get(f"etapa2_{sku}", False)
+    etapa3_ok = st.session_state.get(f"etapa3_{sku}", False)
+
+    with st.container(border=True):
+        col_img, col_info, col_acoes = st.columns([1, 4, 2])
+
+        with col_img:
+            if p.get('imagem'):
+                img_bytes = carregar_imagem_bytes(p['imagem'])
+                if img_bytes:
+                    st.image(img_bytes, use_container_width=True)
+                else:
+                    st.markdown("🖼️")
+
+        with col_info:
+            st.markdown(f"**{nome}**")
+            st.markdown(f"🏷️ SKU: `{sku}` | 📁 {p.get('categoria','')}")
+
+            # Status das etapas
+            col_s1, col_s2, col_s3 = st.columns(3)
+            col_s1.success("✅ Etapa 1")
+            col_s2.success("✅ Etapa 2") if etapa2_ok else col_s2.warning("⏳ Etapa 2")
+            col_s3.success("✅ Etapa 3") if etapa3_ok else col_s3.warning("⏳ Etapa 3")
+
+        with col_acoes:
+            st.markdown("<div style='padding-top:10px'></div>", unsafe_allow_html=True)
+            driver = st.session_state.get("ups_driver")
+
+            if not st.session_state.get("ups_logado"):
+                st.warning("Faça login na aba 🚀 Publicar")
+            else:
+                # Log em tempo real
+                log_key = f"log_{sku}"
+                if log_key not in st.session_state:
+                    st.session_state[log_key] = []
+
+                def add_log(msg):
+                    st.session_state[log_key].append(msg)
+
+                # Mostra log
+                if st.session_state[log_key]:
+                    with st.expander("📋 Log", expanded=True):
+                        for linha in st.session_state[log_key][-8:]:
+                            st.caption(linha)
+
+                st.markdown("**Publicar por plataforma:**")
+
+                # As 4 lojas ficam liberadas ao mesmo tempo — não precisa clicar Shopee
+                # primeiro manualmente. Por trás, Shein/Temu/TikTok garantem sozinhas que
+                # a Shopee já publicou e que a cópia (migração a partir do anúncio da
+                # Shopee, feita uma única vez e reaproveitada pelas 3) já rodou, antes de
+                # preencher seu próprio rascunho.
+                def _render_botao_loja(plataforma, emoji, executor):
+                    ok_key = f"{plataforma}_ok_{sku}"
+                    running_key = f"{plataforma}_running_{sku}"
+                    erro_key = f"{plataforma}_erro_{sku}"
+                    ok = st.session_state.get(ok_key, False)
+
+                    if ok:
+                        col_ok, col_reset = st.columns([4, 1])
+                        col_ok.success(f"✅ {plataforma.title()}")
+                        if col_reset.button("🔄", key=f"reset_{plataforma}_{key_suffix}",
+                                             help="Resetar status e permitir forçar de novo — confirme manualmente no Upseller se já não está publicado, pra evitar duplicidade"):
+                            st.session_state[ok_key] = False
+                            st.session_state[erro_key] = None
+                            st.session_state[running_key] = False
+                            add_log(f"🔄 Status da {plataforma.title()} resetado manualmente.")
+                            st.rerun()
+                    else:
+                        erro = st.session_state.get(erro_key)
+                        if erro:
+                            st.error(f"⛔ Parou: {erro}")
+                        label = f"🔁 {plataforma.title()} (tentar de novo)" if erro else f"{emoji} {plataforma.title()}"
+                        if st.button(label, key=f"{plataforma}_{key_suffix}", use_container_width=True):
+                            st.session_state[running_key] = True
+                            st.session_state[erro_key] = None
+                            add_log(f"{emoji} Iniciando {plataforma.title()}...")
+                            st.rerun()
+
+                    if not ok and st.session_state.get(running_key):
+                        executor()
+                        st.session_state[running_key] = False
+                        st.rerun()
+
+                def _render_botao_combo(plataformas, emoji, rotulo, executores):
+                    """Um botão só que roda várias lojas em sequência (Shein+Temu+TikTok
+                    compartilham a mesma migração a partir da Shopee, então faz sentido
+                    tratar as 3 como um bloco só na tela, em vez de 3 botões separados)."""
+                    combo_id = "_".join(plataformas)
+                    running_key = f"combo_{combo_id}_running_{sku}"
+                    oks = {pl: st.session_state.get(f"{pl}_ok_{sku}", False) for pl in plataformas}
+                    todas_ok = all(oks.values())
+
+                    if todas_ok:
+                        st.success(f"✅ {rotulo}")
+                    else:
+                        status_linha = "  ".join(
+                            f"{'✅' if oks[pl] else '⏳'} {pl.title()}" for pl in plataformas
+                        )
+                        st.caption(status_linha)
+                        for pl in plataformas:
+                            erro = st.session_state.get(f"{pl}_erro_{sku}")
+                            if erro and not oks[pl]:
+                                st.error(f"⛔ {pl.title()}: {erro}")
+
+                        algum_erro = any(st.session_state.get(f"{pl}_erro_{sku}") for pl in plataformas if not oks[pl])
+                        label = f"🔁 {rotulo} (continuar)" if algum_erro else f"{emoji} {rotulo}"
+                        if st.button(label, key=f"combo_{combo_id}_{key_suffix}", use_container_width=True):
+                            st.session_state[running_key] = True
+                            for pl in plataformas:
+                                st.session_state[f"{pl}_erro_{sku}"] = None
+                            add_log(f"{emoji} Iniciando {rotulo}...")
+                            st.rerun()
+
+                    if not todas_ok and st.session_state.get(running_key):
+                        for pl in plataformas:
+                            executores[pl]()
+                        st.session_state[running_key] = False
+                        st.rerun()
+
+                _render_botao_loja("shopee", "🟠", lambda: _rodar_shopee(driver, p, sku, nome, client_bq_pipeline, add_log))
+                _render_botao_combo(
+                    ["shein", "temu", "tiktok"], "🛍️", "Shein + Temu + TikTok",
+                    {
+                        "shein": lambda: _rodar_loja(driver, p, sku, nome, client_bq_pipeline, add_log, "shein"),
+                        "temu": lambda: _rodar_loja(driver, p, sku, nome, client_bq_pipeline, add_log, "temu"),
+                        "tiktok": lambda: _rodar_loja(driver, p, sku, nome, client_bq_pipeline, add_log, "tiktok"),
+                    }
+                )
+
+                # Status geral + botão "Todas as Lojas"
+                shopee_ok = st.session_state.get(f"shopee_ok_{sku}", False)
+                shein_ok = st.session_state.get(f"shein_ok_{sku}", False)
+                temu_ok = st.session_state.get(f"temu_ok_{sku}", False)
+                tiktok_ok = st.session_state.get(f"tiktok_ok_{sku}", False)
+                total_ok = sum([shopee_ok, shein_ok, temu_ok, tiktok_ok])
+
+                st.markdown("---")
+                if total_ok == 4:
+                    st.success("🎉 Publicado em todas!")
+                else:
+                    st.caption(f"✅ {total_ok}/4 plataformas")
+                    todas_key = f"todas_running_{sku}"
+                    if st.button("✅ Todas as Lojas", key=f"todas_{key_suffix}", use_container_width=True, type="primary"):
+                        st.session_state[todas_key] = True
+                        add_log("✅ Iniciando publicação em todas as lojas...")
+                        st.rerun()
+                    if st.session_state.get(todas_key):
+                        _rodar_shopee(driver, p, sku, nome, client_bq_pipeline, add_log)
+                        _rodar_loja(driver, p, sku, nome, client_bq_pipeline, add_log, "shein")
+                        _rodar_loja(driver, p, sku, nome, client_bq_pipeline, add_log, "temu")
+                        _rodar_loja(driver, p, sku, nome, client_bq_pipeline, add_log, "tiktok")
+                        st.session_state[todas_key] = False
+                        st.rerun()
+
+            # Remove da lista "Enviar para Lojas" — o produto fica aqui indefinidamente
+            # até publicar nas 4 (ele NÃO some sozinho), então esse botão é a única forma
+            # de tirar um item daqui manualmente (ex: teste, duplicado). Reaproveita o
+            # mesmo arquivo de exclusão da aba Publicar, pra sobreviver a restart.
+            if st.button("🗑️ Remover desta lista", key=f"rem_envio_{key_suffix}", use_container_width=True):
+                excluidos_envio = st.session_state.get("pub_excluidos", set())
+                excluidos_envio.add(p.get('id'))
+                st.session_state["pub_excluidos"] = excluidos_envio
+                salvar_excluidos(excluidos_envio)
+                st.rerun()
+
+# ============================================================
 # PÁGINA PRINCIPAL
 # ============================================================
 
-def pagina_campineira():
+def pagina_campineira(client_bq=None):
+    """client_bq: conexão BigQuery já aberta, passada pelo LeMarketplace.py (reaproveita
+    a mesma conexão do resto do app). NUNCA importar "LeMarketplace" daqui dentro pra
+    conseguir uma conexão — é o script principal rodado pelo Streamlit, e importar dele
+    a partir de outro módulo re-executa o arquivo inteiro (sidebar, botões, tudo) como
+    efeito colateral, causando erro de IDs de widget duplicados e conteúdo duplicado
+    na tela. Se ninguém passar uma conexão, abre uma própria (conectar_bigquery_rpa),
+    que não depende de importar nada do LeMarketplace."""
     st.markdown("## 🏭 Campineira — Varredura de Produtos")
     st.markdown("---")
 
-    # Conexão BigQuery para o pipeline de publicação (roda na thread principal do
-    # Streamlit — aqui é seguro usar a versão cacheada do LeMarketplace).
-    try:
-        from LeMarketplace import conectar_bigquery
-        client_bq_pipeline = conectar_bigquery()
-    except Exception:
-        client_bq_pipeline = None
+    if client_bq is not None:
+        client_bq_pipeline = client_bq
+    else:
+        try:
+            client_bq_pipeline = conectar_bigquery_rpa()
+        except Exception as _erro_bq_conexao:
+            client_bq_pipeline = None
+            st.error(f"⚠️ Não conectou ao BigQuery nesta página: {str(_erro_bq_conexao)[:300]}")
 
     status = ler_status()
     resultados_brutos = ler_resultados()
 
     # ---- ABA DE CONFIGURAÇÃO ----
     if "pub_excluidos" not in st.session_state:
-        st.session_state["pub_excluidos"] = set()
+        # Carrega do arquivo, não só um set() vazio — sem isso, um item removido
+        # "voltava sozinho" depois de qualquer reinício do Streamlit, porque
+        # st.session_state some mas o arquivo local continua.
+        st.session_state["pub_excluidos"] = carregar_excluidos()
 
-    tab1, tab2, tab3, tab4, tab5 = st.tabs(["⚙️ Configurar e Rodar", "📦 Resultados", "🖼️ Galeria", "🚀 Publicar", "🏪 Enviar para Lojas"])
+    tab1, tab2, tab3, tab4, tab_hist = st.tabs(
+        ["⚙️ Configurar e Rodar", "📦 Resultados", "🖼️ Galeria", "🚀 Publicar", "🗂️ Histórico"]
+    )
 
     # ============================================================
     # TAB 1 — CONFIGURAÇÃO
@@ -587,13 +1237,15 @@ def pagina_campineira():
 
         with col_a:
             opcoes_cats = ["Todas"] + CATEGORIAS
-            cat_sel = st.selectbox("Categoria", opcoes_cats, label_visibility="collapsed")
+            cat_sel = st.selectbox("Categoria", opcoes_cats)
         with col_b:
-            est_input = st.number_input("Estoque mín.", min_value=0, value=70, step=5, label_visibility="collapsed")
+            est_input = st.number_input("Quantidade mínima", min_value=0, value=70, step=5)
         with col_c:
-            preco_input = st.number_input("Preço mín. R$", min_value=0.0, value=4.99, step=0.50, label_visibility="collapsed")
+            preco_input = st.number_input("Preço >=", min_value=0.0, value=4.99, step=0.50)
         with col_d:
-            st.markdown("<div style='padding-top:26px'></div>", unsafe_allow_html=True)
+            # Rótulo invisível (mesma altura de um label real) só pra alinhar o botão
+            # com a linha dos campos — sem isso ele ficava deslocado pra baixo.
+            st.markdown("<div style='visibility:hidden;'>Ação</div>", unsafe_allow_html=True)
             if st.button("➕", use_container_width=True):
                 if cat_sel == "Todas":
                     # Adiciona todas as categorias de uma vez
@@ -633,16 +1285,10 @@ def pagina_campineira():
 
             st.markdown("---")
 
-            # Checkbox detalhes — aparece sempre que há fila
-            buscar_det = st.checkbox(
-                "🔍 Buscar detalhes do produto (EAN, Fabricante, Cor, Composição...)",
-                value=st.session_state.get("campineira_buscar_detalhes", False),
-                key="chk_buscar_det",
-                help="⚠️ Aumenta o tempo — acessa a página de cada produto individualmente."
-            )
-            st.session_state["campineira_buscar_detalhes"] = buscar_det
-            if buscar_det:
-                st.warning("⚠️ Modo detalhado ativo — a varredura será mais lenta (≈1.5s por produto).")
+            # Varredura sempre no modo detalhado (EAN, Fabricante, Cor, Composição...)
+            # — precisamos do máximo de informação populada nas tabelas, então não faz
+            # sentido oferecer a opção de pular isso pra ganhar velocidade.
+            st.session_state["campineira_buscar_detalhes"] = True
 
             st.markdown("---")
 
@@ -714,7 +1360,11 @@ def pagina_campineira():
             with col_f2:
                 busca = st.text_input("Buscar produto", "")
             with col_f3:
-                ordem = st.selectbox("Ordenar por", ["Estoque (maior)", "Estoque (menor)", "Preço (maior)", "Preço (menor)"])
+                ordem = st.selectbox("Ordenar por", [
+                    "Lucro (maior)", "Lucro (menor)",
+                    "Estoque (maior)", "Estoque (menor)",
+                    "Preço (maior)", "Preço (menor)",
+                ])
 
             # Aplica filtros
             if cat_sel != "Todas":
@@ -722,8 +1372,17 @@ def pagina_campineira():
             if busca:
                 validados = [p for p in validados if busca.upper() in p['nome'].upper()]
 
-            # Ordena
-            if ordem == "Estoque (maior)":
+            def _lucro_max(p):
+                """Melhor lucro entre as 4 plataformas — mesmo critério usado como
+                ordenação padrão em filtrar_resultados()."""
+                return max((p.get(f"lucro_{m}") or 0) for m in ["shein", "shopee", "temu", "tiktok"])
+
+            # Ordena — "Lucro (maior)" é a opção padrão (primeira da lista)
+            if ordem == "Lucro (maior)":
+                validados.sort(key=_lucro_max, reverse=True)
+            elif ordem == "Lucro (menor)":
+                validados.sort(key=_lucro_max)
+            elif ordem == "Estoque (maior)":
                 validados.sort(key=lambda x: x.get('estoque') or 0, reverse=True)
             elif ordem == "Estoque (menor)":
                 validados.sort(key=lambda x: x.get('estoque') or 0)
@@ -742,6 +1401,7 @@ def pagina_campineira():
                     "Nome": p.get('nome'),
                     "Estoque": p.get('estoque'),
                     "Custo_Campineira": p.get('preco'),
+                    "Lucro_Maior": _lucro_max(p),
                     "Preco_Shein_15pct": p.get('preco_shein'),
                     "Preco_Shopee_15pct": p.get('preco_shopee'),
                     "Preco_Temu_15pct": p.get('preco_temu'),
@@ -781,6 +1441,7 @@ def pagina_campineira():
                     "Nome": p.get('nome'),
                     "Estoque": p.get('estoque'),
                     "Custo (Campineira)": p.get('preco'),
+                    "💰 Lucro": f"R$ {_lucro_max(p):.2f}",
                     "💛 Shein": f"R$ {p.get('preco_shein', 0):.2f}",
                     "🟠 Shopee": f"R$ {p.get('preco_shopee', 0):.2f}",
                     "🟡 Temu": f"R$ {p.get('preco_temu', 0):.2f}",
@@ -839,15 +1500,16 @@ def pagina_campineira():
 
             st.info(f"**{len(validados)}** produtos")
 
-            cols_por_linha = 4
+            cols_por_linha = 6
             for i in range(0, len(validados), cols_por_linha):
                 cols = st.columns(cols_por_linha)
                 for j, p in enumerate(validados[i:i+cols_por_linha]):
                     with cols[j]:
                         if p.get('imagem'):
-                            try:
-                                st.image(p['imagem'], use_container_width=True)
-                            except:
+                            img_bytes = carregar_imagem_bytes(p['imagem'])
+                            if img_bytes:
+                                st.image(img_bytes, use_container_width=True)
+                            else:
                                 st.markdown("🖼️", unsafe_allow_html=True)
                         st.markdown(f"**{p['nome'][:50]}**")
                         st.markdown(f"🏷️ {p.get('preco', 'N/A')}  |  📦 {p.get('estoque', '?')} un")
@@ -870,6 +1532,107 @@ def pagina_campineira():
             st.stop()
 
         driver_ups = widget_login_upseller()
+
+        # ── REPROCESSAR IMAGENS ──────────────────────────────────────
+        # Lista TODOS os produtos já publicados no Armazém, não só os com erro
+        # registrado — um upload pode "dar certo" e ainda assim subir a imagem
+        # errada (ex: um selo/badge do site de origem em vez da foto real), então
+        # não dá pra confiar só em erro pra saber quem precisa reprocessar.
+        # Reenvia só a imagem no anúncio já existente, sem criar SKU duplicado.
+        # Reaproveita a mesma conexão do resto da página (client_bq_pipeline) em vez
+        # de abrir outra — ver nota em pagina_campineira() sobre nunca importar
+        # "LeMarketplace" daqui de dentro.
+        client_bq_img = client_bq_pipeline
+
+        produtos_imagem_pendente = listar_produtos_imagem_pendente(client_bq_img)
+        if produtos_imagem_pendente:
+            with st.expander(f"🖼️ Reprocessar Imagens ({len(produtos_imagem_pendente)} publicados)", expanded=False):
+                busca_img = st.text_input(
+                    "Buscar por nome ou SKU", key="busca_reproc_img",
+                    placeholder="Digite pra filtrar (a lista completa não é exibida sem busca)"
+                )
+                itens_filtrados = []
+                if busca_img.strip():
+                    alvo = busca_img.strip().lower()
+                    itens_filtrados = [
+                        it for it in produtos_imagem_pendente
+                        if alvo in (it["nome"] or "").lower() or alvo in (it["sku_upseller"] or "").lower()
+                    ]
+                else:
+                    # Sem busca, mostra só quem tem aviso de imagem registrado —
+                    # evita renderizar centenas de cards de uma vez
+                    itens_filtrados = [it for it in produtos_imagem_pendente if "Imagem:" in (it["mensagem"] or "")]
+                    if itens_filtrados:
+                        st.caption(f"Mostrando {len(itens_filtrados)} com aviso de imagem registrado. Busque por nome/SKU pra reprocessar qualquer outro.")
+                    else:
+                        st.caption("Nenhum aviso de imagem registrado. Busque por nome/SKU pra reprocessar qualquer produto publicado.")
+
+                for item in itens_filtrados:
+                    sku_item = item["sku_upseller"]
+                    with st.container(border=True):
+                        col_info, col_btn = st.columns([4, 1])
+                        with col_info:
+                            st.markdown(f"**{item['nome']}**")
+                            st.caption(f"SKU: `{sku_item}` — {item['mensagem']}")
+                        with col_btn:
+                            if not st.session_state.get("ups_logado"):
+                                st.button("🔒 Reprocessar", key=f"reproc_img_{sku_item}", disabled=True,
+                                          use_container_width=True, help="Faça login no Upseller primeiro")
+                            else:
+                                if st.button("🔄 Reprocessar", key=f"reproc_img_{sku_item}", use_container_width=True):
+                                    from modulo_upseller import reprocessar_imagem_armazem
+                                    with st.spinner(f"Reenviando imagem do SKU {sku_item}..."):
+                                        ok_img, msg_img = reprocessar_imagem_armazem(
+                                            driver_ups, sku_item, item.get("imagem")
+                                        )
+                                    if ok_img:
+                                        st.success(msg_img)
+                                    else:
+                                        st.error(msg_img)
+
+        # ── REPROCESSAR PUBLICAÇÕES COM ERRO NO ARMAZÉM ─────────────
+        # Produtos cuja última tentativa de publicar no Armazém (Etapa 1) falhou —
+        # nunca chegaram a ser criados. Reconstrói os dados a partir do BigQuery e
+        # tenta publicar de novo do zero (gera um SKU novo).
+        produtos_armazem_com_erro = listar_produtos_armazem_com_erro(client_bq_img)
+        if produtos_armazem_com_erro:
+            with st.expander(f"🚀 Reprocessar Publicações com Erro no Armazém ({len(produtos_armazem_com_erro)})", expanded=False):
+                for item in produtos_armazem_com_erro:
+                    id_item = item["id_produto"]
+                    with st.container(border=True):
+                        col_info, col_btn = st.columns([4, 1])
+                        with col_info:
+                            st.markdown(f"**{item['nome']}**")
+                            st.caption(f"{item.get('categoria', '')} — {item['mensagem']}")
+                            if not item.get("produto"):
+                                st.caption("⚠️ Não foi possível recuperar os dados completos do produto no BigQuery.")
+                        with col_btn:
+                            if not item.get("produto"):
+                                st.button("🔄 Reprocessar", key=f"reproc_arm_{id_item}", disabled=True,
+                                          use_container_width=True, help="Dados do produto não encontrados")
+                            elif not st.session_state.get("ups_logado"):
+                                st.button("🔒 Reprocessar", key=f"reproc_arm_{id_item}", disabled=True,
+                                          use_container_width=True, help="Faça login no Upseller primeiro")
+                            else:
+                                if st.button("🔄 Reprocessar", key=f"reproc_arm_{id_item}", use_container_width=True):
+                                    from modulo_upseller import publicar_produto_upseller
+                                    with st.spinner(f"Publicando '{item['nome']}' de novo..."):
+                                        ok_arm, msg_arm = publicar_produto_upseller(driver_ups, item["produto"])
+                                    sku_gerado = None
+                                    if ok_arm:
+                                        f_sku = "upseller_sku_counter.json"
+                                        if os.path.exists(f_sku):
+                                            with open(f_sku) as f_sku_h:
+                                                num = json.load(f_sku_h).get("contador", 1)
+                                            sku_gerado = f"RJ-{num:05d}"
+                                    registrar_evento_pipeline_bq(
+                                        client_bq_img, id_item, sku_gerado, item["nome"], item.get("categoria"),
+                                        "armazem", "ok" if ok_arm else "erro", msg_arm
+                                    )
+                                    if ok_arm:
+                                        st.success(msg_arm)
+                                    else:
+                                        st.error(msg_arm)
 
         st.markdown("---")
         st.markdown("### 📦 Produtos Validados para Publicar")
@@ -898,24 +1661,26 @@ def pagina_campineira():
             excluidos = st.session_state.get("pub_excluidos", set())
             validados = [p for p in validados if p.get('id') not in excluidos]
 
-            col_inf, col_rest = st.columns([3,1])
-            with col_inf:
-                st.info(f"**{len(validados)}** produtos prontos para publicar")
-            with col_rest:
-                if excluidos and st.button("↩️ Restaurar removidos", use_container_width=True):
-                    st.session_state["pub_excluidos"] = set()
-                    st.rerun()
+            # Separa quem tem foto de verdade (padrão .../produtos/##/foto####.jpg)
+            # de quem capturou algo errado (ícone, selo, logo do site) — produto sem
+            # foto válida NÃO pode ser publicado no Armazém, fica isolado numa seção
+            # à parte pra não travar/poluir a fila principal.
+            validados_com_imagem = [p for p in validados if imagem_parece_valida(p.get('imagem'))]
+            validados_sem_imagem = [p for p in validados if not imagem_parece_valida(p.get('imagem'))]
 
-            for idx, p in enumerate(validados):
+            def _renderizar_card_pendente(p, idx, permitir_publicar):
                 with st.container(border=True):
-                    col_img, col_info, col_btn = st.columns([1, 4, 1.5])
+                    col_img, col_info, col_btn = st.columns([0.7, 4.3, 1.5])
 
                     with col_img:
                         if p.get('imagem'):
-                            try:
-                                st.image(p['imagem'], use_container_width=True)
-                            except:
+                            img_bytes = carregar_imagem_bytes(p['imagem'])
+                            if img_bytes:
+                                st.image(img_bytes, use_container_width=True)
+                            else:
                                 st.markdown("🖼️")
+                        else:
+                            st.markdown("🖼️")
 
                     with col_info:
                         st.markdown(f"**{p.get('nome', '')}**")
@@ -924,6 +1689,8 @@ def pagina_campineira():
                             f"💰 Custo: **{p.get('preco', 'N/A')}** | "
                             f"📁 {p.get('categoria', '')}"
                         )
+                        if not permitir_publicar:
+                            st.caption(f"⚠️ Imagem inválida capturada: `{p.get('imagem') or '(vazio)'}`")
                         col_p1, col_p2, col_p3, col_p4 = st.columns(4)
                         col_p1.metric("💛 Shein", f"R$ {p.get('preco_shein', 0):.2f}")
                         col_p2.metric("🟠 Shopee", f"R$ {p.get('preco_shopee', 0):.2f}")
@@ -936,16 +1703,40 @@ def pagina_campineira():
                         if publicado:
                             msg = st.session_state.get(f"pub_msg_{p.get('id')}", "✅ Publicado!")
                             st.success(msg)
+                        elif not permitir_publicar:
+                            st.button("🔒 Publicar", key=f"btn_pub_dis_img_{idx}", disabled=True,
+                                      use_container_width=True, help="Corrija a imagem antes de publicar")
                         elif st.session_state.get("ups_logado"):
+                            # Mostra o erro da última tentativa de forma persistente — antes
+                            # ficava só guardado em pub_msg_{id} sem nunca aparecer na tela
+                            # quando a publicação falhava (ex: EAN/código de barra duplicado),
+                            # dando a impressão de que nada tinha acontecido.
+                            erro_anterior = st.session_state.get(f"pub_msg_{p.get('id')}")
+                            if erro_anterior:
+                                st.error(f"⛔ {erro_anterior}")
                             if st.button("🚀 Publicar", key=f"btn_pub_{idx}", use_container_width=True, type="primary"):
                                 with st.spinner("Publicando..."):
                                     from modulo_upseller import publicar_produto_upseller, get_proximo_sku
+
+                                    # Valida o EAN ANTES de tentar publicar — evita mandar pro
+                                    # Upseller um cadastro que já sabemos que vai ser recusado
+                                    # com "código de barra já existe" (erro só aparecia depois
+                                    # de já ter gasto o SKU e a tentativa inteira).
+                                    sku_repetido = checar_ean_duplicado_bq(client_bq_pipeline, p.get('ean'))
+                                    if sku_repetido:
+                                        sucesso = False
+                                        msg = f"❌ EAN {p.get('ean')} já usado no SKU {sku_repetido} — não publicado, pra evitar duplicidade."
+                                        st.session_state[f"pub_{p.get('id')}"] = False
+                                        st.session_state[f"pub_msg_{p.get('id')}"] = msg
+                                        st.rerun()
+
                                     driver = st.session_state.get("ups_driver")
                                     sucesso, msg = publicar_produto_upseller(driver, p)
                                     st.session_state[f"pub_{p.get('id')}"] = sucesso
                                     st.session_state[f"pub_msg_{p.get('id')}"] = msg
                                     # Salva SKU gerado para usar na etapa 2
                                     sku_gerado = None
+                                    avisos_bq = []
                                     if sucesso:
                                         import json, os
                                         f_sku = "upseller_sku_counter.json"
@@ -954,12 +1745,45 @@ def pagina_campineira():
                                                 num = json.load(f).get("contador", 1)
                                             sku_gerado = f"RJ-{num:05d}"
                                             st.session_state[f"pub_sku_{p.get('id')}"] = sku_gerado
+                                        # Registra o novo SKU (+ EAN) na base de controle — é o que
+                                        # checar_ean_duplicado_bq() consulta nas próximas publicações.
+                                        ok_sku_bq, erro_sku_bq = registrar_sku_bq(client_bq_pipeline, sku_gerado, p.get('ean'), p.get('id'), p.get('nome'))
+                                        if not ok_sku_bq:
+                                            avisos_bq.append(f"SKU não registrado no BigQuery: {erro_sku_bq}")
+
+                                        # Cria o produto em tb_produtos (mesma tabela do Cadastro
+                                        # manual) — uma linha por marketplace, mesmo SKU do Upseller.
+                                        ok_prod_bq, erro_prod_bq = registrar_produto_em_tb_produtos(
+                                            client_bq_pipeline, sku_gerado, p.get('nome'), p.get('preco_num')
+                                        )
+                                        if not ok_prod_bq:
+                                            avisos_bq.append(f"tb_produtos não atualizado: {erro_prod_bq}")
+
+                                        # Marca o SKU no histórico permanente — fica registrado ali até
+                                        # a próxima varredura reler esse produto.
+                                        ok_hist_sku, erro_hist_sku = marcar_sku_historico_bq(client_bq_pipeline, p.get('id'), sku_gerado)
+                                        if not ok_hist_sku:
+                                            avisos_bq.append(f"SKU não marcado no histórico: {erro_hist_sku}")
+
                                     # Grava a etapa Armazém no BigQuery — garante que o produto
                                     # continue aparecendo em "Enviar para Lojas" mesmo após F5/cache limpo.
-                                    registrar_evento_pipeline_bq(
+                                    # Se essa gravação falhar (ex: tabela não existe), avisa em vez de
+                                    # engolir silenciosamente — foi assim que a tabela ficou vazia sem
+                                    # ninguém perceber.
+                                    ok_evento_bq, erro_evento_bq = registrar_evento_pipeline_bq(
                                         client_bq_pipeline, p.get('id'), sku_gerado, p.get('nome'),
                                         p.get('categoria'), "armazem", "ok" if sucesso else "erro", msg
                                     )
+                                    if not ok_evento_bq:
+                                        avisos_bq.append(f"Evento do pipeline não registrado: {erro_evento_bq}")
+
+                                    # st.warning() aqui seria apagado pelo st.rerun() logo abaixo antes
+                                    # de alguém ver — em vez disso, anexa ao msg persistente que já é
+                                    # mostrado toda vez que o card renderiza (mesmo padrão do erro de
+                                    # publicação).
+                                    if avisos_bq:
+                                        msg = msg + " ⚠️ " + " | ".join(avisos_bq)
+                                        st.session_state[f"pub_msg_{p.get('id')}"] = msg
                                     st.rerun()
                         else:
                             st.button("🔒 Publicar", key=f"btn_pub_dis_{idx}", disabled=True,
@@ -968,240 +1792,118 @@ def pagina_campineira():
                         if not publicado:
                             if st.button("🗑️ Remover", key=f"btn_rem_{idx}", use_container_width=True):
                                 st.session_state["pub_excluidos"].add(p.get('id'))
+                                salvar_excluidos(st.session_state["pub_excluidos"])
                                 st.rerun()
 
+            if validados_sem_imagem:
+                with st.expander(f"⚠️ Produtos Sem Imagem Válida — não publicáveis ({len(validados_sem_imagem)})", expanded=False):
+                    st.caption("Esses produtos capturaram algo errado no lugar da foto (ícone, selo ou logo do "
+                               "site) e ficam bloqueados pra publicar até a imagem ser corrigida. Rode a varredura "
+                               "dessa categoria de novo pra tentar recapturar a foto certa.")
+                    for idx, p in enumerate(validados_sem_imagem):
+                        _renderizar_card_pendente(p, f"semimg_{idx}", permitir_publicar=False)
+
+            col_inf, col_rest = st.columns([3,1])
+            with col_inf:
+                st.info(f"**{len(validados_com_imagem)}** produtos prontos para publicar")
+            with col_rest:
+                if excluidos and st.button("↩️ Restaurar removidos", use_container_width=True):
+                    st.session_state["pub_excluidos"] = set()
+                    salvar_excluidos(set())
+                    st.rerun()
+
+            for idx, p in enumerate(validados_com_imagem):
+                _renderizar_card_pendente(p, idx, permitir_publicar=True)
+
     # ============================================================
-    # TAB 5 — ENVIAR PARA LOJAS (PÓS-PUBLICAÇÃO)
+    # TAB HISTÓRICO — ACERVO PERMANENTE DE PRODUTOS DA CAMPINEIRA
     # ============================================================
-    with tab5:
-        st.markdown("### 🏪 Pipeline Completo de Publicação")
-
-        # Status das etapas em legenda
-        col_l1, col_l2, col_l3, col_l4, col_l5 = st.columns(5)
-        col_l1.info("1️⃣ Armazém")
-        col_l2.info("2️⃣ → Shopee")
-        col_l3.info("3️⃣ Shopee OK")
-        col_l4.info("4️⃣ → Shein/Temu/TikTok")
-        col_l5.info("5️⃣ Todas OK")
-        st.markdown("---")
-        st.markdown("### 🏪 Enviar Produtos para as Lojas")
-        st.info("Produtos que passaram pela Etapa 1 (Publicar) ficam aqui para as etapas seguintes.")
+    with tab_hist:
+        st.markdown("### 🗂️ Histórico de Produtos da Campineira")
+        st.caption(
+            "Diferente da aba **Resultados** (que mostra só a última varredura), este é um "
+            "registro permanente — nunca é sobrescrito. Estoque e preço só são atualizados "
+            "quando realmente mudam desde a última leitura; o SKU fica gravado assim que o "
+            "produto é publicado no Armazém e permanece ali de varredura em varredura."
+        )
         st.markdown("---")
 
-        # Lista produtos já publicados — combina session_state (atualização instantânea
-        # dentro da sessão atual) com o BigQuery (sobrevive a F5, cache limpo, nova sessão).
-        pipeline_bq = carregar_pipeline_bq(client_bq_pipeline)
+        # Reaproveita a mesma conexão já usada no resto da página (a que salva em
+        # tb_produtos/tb_sku_registrados ao publicar) em vez de abrir outra — evita
+        # uma segunda tentativa de conexão que pode falhar por motivo diferente.
+        client_bq_hist = client_bq_pipeline
 
-        publicados = []
-        for p in filtrar_resultados(resultados_brutos, st.session_state.get("campineira_filtros", {})):
-            pid = p.get('id')
-            sku_sessao = st.session_state.get(f"pub_sku_{pid}")
-            reg_bq = pipeline_bq.get(pid)
-
-            if st.session_state.get(f"pub_{pid}") and sku_sessao:
-                publicados.append({**p, "sku_upseller": sku_sessao})
-            elif reg_bq and reg_bq.get("armazem_ok"):
-                sku_bq = reg_bq["sku_upseller"]
-                publicados.append({**p, "sku_upseller": sku_bq})
-                # Restaura na sessão o que já foi concluído, pra manter os
-                # botões de cada etapa (Shopee/Shein/Temu/TikTok) consistentes.
-                st.session_state.setdefault(f"pub_{pid}", True)
-                st.session_state.setdefault(f"pub_sku_{pid}", sku_bq)
-                st.session_state.setdefault(f"shopee_ok_{sku_bq}", reg_bq.get("shopee_ok", False))
-                st.session_state.setdefault(f"shein_ok_{sku_bq}", reg_bq.get("shein_ok", False))
-                st.session_state.setdefault(f"temu_ok_{sku_bq}", reg_bq.get("temu_ok", False))
-                st.session_state.setdefault(f"tiktok_ok_{sku_bq}", reg_bq.get("tiktok_ok", False))
-
-        if not publicados:
-            st.warning("Nenhum produto publicado ainda. Vá para a aba 🚀 Publicar primeiro.")
+        if not client_bq_hist:
+            st.warning("Sem conexão com o BigQuery no momento — não dá pra consultar o histórico.")
         else:
-            st.success(f"**{len(publicados)}** produto(s) prontos para enviar às lojas")
+            try:
+                df_hist = client_bq_hist.query(f"""
+                    SELECT * FROM `{TABLE_HISTORICO}`
+                    ORDER BY data_ultima_leitura DESC
+                """).to_dataframe()
+            except Exception as e:
+                df_hist = pd.DataFrame()
+                st.error(f"Erro ao consultar o histórico: {str(e)[:250]}")
 
-            for idx, p in enumerate(publicados):
-                sku = p.get("sku_upseller", "")
-                nome = p.get("nome", "")
-                etapa2_ok = st.session_state.get(f"etapa2_{sku}", False)
-                etapa3_ok = st.session_state.get(f"etapa3_{sku}", False)
+            if df_hist.empty:
+                st.info("Histórico ainda vazio — rode uma varredura em ⚙️ Configurar e Rodar pra começar a popular.")
+            else:
+                total = len(df_hist)
+                publicados = int(df_hist["sku_upseller"].notna().sum())
 
-                with st.container(border=True):
-                    col_img, col_info, col_acoes = st.columns([1, 4, 2])
+                col_m1, col_m2, col_m3 = st.columns(3)
+                col_m1.metric("📦 Total no histórico", total)
+                col_m2.metric("✅ Já publicados no Armazém", publicados)
+                col_m3.metric("⏳ Aguardando publicação", total - publicados)
 
-                    with col_img:
-                        if p.get('imagem'):
-                            try:
-                                st.image(p['imagem'], use_container_width=True)
-                            except:
-                                st.markdown("🖼️")
+                st.markdown("---")
 
-                    with col_info:
-                        st.markdown(f"**{nome}**")
-                        st.markdown(f"🏷️ SKU: `{sku}` | 📁 {p.get('categoria','')}")
+                col_f1, col_f2, col_f3 = st.columns(3)
+                with col_f1:
+                    cats_hist = ["Todas"] + sorted(df_hist["categoria"].dropna().unique().tolist())
+                    cat_sel_hist = st.selectbox("Categoria", cats_hist, key="hist_cat")
+                with col_f2:
+                    busca_hist = st.text_input("Buscar por nome ou SKU", key="hist_busca")
+                with col_f3:
+                    status_hist = st.selectbox("Status", ["Todos", "✅ Publicados", "⏳ Não publicados"], key="hist_status")
 
-                        # Status das etapas
-                        col_s1, col_s2, col_s3 = st.columns(3)
-                        col_s1.success("✅ Etapa 1")
-                        col_s2.success("✅ Etapa 2") if etapa2_ok else col_s2.warning("⏳ Etapa 2")
-                        col_s3.success("✅ Etapa 3") if etapa3_ok else col_s3.warning("⏳ Etapa 3")
+                df_view = df_hist.copy()
+                if cat_sel_hist != "Todas":
+                    df_view = df_view[df_view["categoria"] == cat_sel_hist]
+                if busca_hist:
+                    alvo = busca_hist.strip().upper()
+                    mask = (
+                        df_view["nome"].fillna("").str.upper().str.contains(alvo)
+                        | df_view["sku_upseller"].fillna("").str.upper().str.contains(alvo)
+                    )
+                    df_view = df_view[mask]
+                if status_hist == "✅ Publicados":
+                    df_view = df_view[df_view["sku_upseller"].notna()]
+                elif status_hist == "⏳ Não publicados":
+                    df_view = df_view[df_view["sku_upseller"].isna()]
 
-                    with col_acoes:
-                        st.markdown("<div style='padding-top:10px'></div>", unsafe_allow_html=True)
-                        driver = st.session_state.get("ups_driver")
+                st.caption(f"**{len(df_view)}** produto(s) — ordenado pela leitura mais recente")
 
-                        if not st.session_state.get("ups_logado"):
-                            st.warning("Faça login na aba 🚀 Publicar")
-                        else:
-                            # Log em tempo real
-                            log_key = f"log_{sku}"
-                            if log_key not in st.session_state:
-                                st.session_state[log_key] = []
-
-                            def add_log(msg):
-                                st.session_state[log_key].append(msg)
-
-                            # Mostra log
-                            if st.session_state[log_key]:
-                                with st.expander("📋 Log", expanded=True):
-                                    for linha in st.session_state[log_key][-8:]:
-                                        st.caption(linha)
-
-                            st.markdown("**Publicar por plataforma:**")
-
-                            # ── SHOPEE ──────────────────────────────
-                            shopee_ok = st.session_state.get(f"shopee_ok_{sku}", False)
-                            col_s1, col_s2 = st.columns(2)
-                            with col_s1:
-                                if shopee_ok:
-                                    st.success("✅ Shopee")
-                                else:
-                                    if st.button("🟠 Shopee", key=f"shopee_{idx}", use_container_width=True):
-                                        st.session_state[f"shopee_running_{sku}"] = True
-                                        add_log("🟠 Iniciando Shopee...")
-                                        st.rerun()
-                            with col_s2:
-                                if not shopee_ok and st.session_state.get(f"shopee_running_{sku}"):
-                                    from modulo_upseller import etapa2_copiar_para_lojas, etapa3_editar_rascunho, preencher_rascunho_shopee, finalizar_rascunho
-                                    add_log("→ Copiando para Shopee...")
-                                    ok2, msg2 = etapa2_copiar_para_lojas(driver, sku)
-                                    add_log(msg2)
-                                    msg_final = msg2
-                                    if ok2:
-                                        add_log("→ Abrindo rascunho...")
-                                        ok3, msg3, cat = etapa3_editar_rascunho(driver, sku, nome)
-                                        add_log(msg3)
-                                        msg_final = msg3
-                                        if ok3:
-                                            add_log("→ Preenchendo campos...")
-                                            ok4, msg4 = preencher_rascunho_shopee(driver, p, sku, cat)
-                                            add_log(msg4)
-                                            msg_final = msg4
-                                            if ok4:
-                                                add_log("→ Publicando...")
-                                                finalizar_rascunho(driver)
-                                                st.session_state[f"shopee_ok_{sku}"] = True
-                                                add_log("✅ Shopee publicado!")
-                                                msg_final = "✅ Shopee publicado!"
-                                    registrar_evento_pipeline_bq(
-                                        client_bq_pipeline, p.get('id'), sku, nome, p.get('categoria'),
-                                        "shopee", "ok" if st.session_state.get(f"shopee_ok_{sku}") else "erro", msg_final
-                                    )
-                                    st.session_state[f"shopee_running_{sku}"] = False
-                                    st.rerun()
-
-                            # ── SHEIN ────────────────────────────────
-                            shein_ok = st.session_state.get(f"shein_ok_{sku}", False)
-                            col_sh1, col_sh2 = st.columns(2)
-                            with col_sh1:
-                                if shein_ok:
-                                    st.success("✅ Shein")
-                                elif not shopee_ok:
-                                    st.button("💛 Shein", key=f"shein_{idx}", disabled=True, use_container_width=True, help="Publique na Shopee primeiro")
-                                else:
-                                    if st.button("💛 Shein", key=f"shein_{idx}", use_container_width=True):
-                                        st.session_state[f"shein_running_{sku}"] = True
-                                        add_log("💛 Iniciando Shein...")
-                                        st.rerun()
-                            with col_sh2:
-                                if not shein_ok and st.session_state.get(f"shein_running_{sku}"):
-                                    from modulo_upseller import etapa4_migrar_para_lojas, editar_rascunho_plataforma
-                                    add_log("→ Migrando anúncio...")
-                                    ok4, msg4 = etapa4_migrar_para_lojas(driver, sku)
-                                    add_log(msg4)
-                                    msg_final = msg4
-                                    if ok4:
-                                        add_log("→ Editando rascunho Shein...")
-                                        ok5, msg5 = editar_rascunho_plataforma(driver, sku, p, "shein")
-                                        add_log(msg5)
-                                        msg_final = msg5
-                                        if ok5:
-                                            st.session_state[f"shein_ok_{sku}"] = True
-                                            add_log("✅ Shein publicado!")
-                                            msg_final = "✅ Shein publicado!"
-                                    registrar_evento_pipeline_bq(
-                                        client_bq_pipeline, p.get('id'), sku, nome, p.get('categoria'),
-                                        "shein", "ok" if st.session_state.get(f"shein_ok_{sku}") else "erro", msg_final
-                                    )
-                                    st.session_state[f"shein_running_{sku}"] = False
-                                    st.rerun()
-
-                            # ── TEMU ────────────────────────────────
-                            temu_ok = st.session_state.get(f"temu_ok_{sku}", False)
-                            col_t1, _ = st.columns(2)
-                            with col_t1:
-                                if temu_ok:
-                                    st.success("✅ Temu")
-                                elif not shopee_ok:
-                                    st.button("🟡 Temu", key=f"temu_{idx}", disabled=True, use_container_width=True, help="Publique na Shopee primeiro")
-                                else:
-                                    if st.button("🟡 Temu", key=f"temu_{idx}", use_container_width=True):
-                                        st.session_state[f"temu_running_{sku}"] = True
-                                        add_log("🟡 Iniciando Temu...")
-                                        st.rerun()
-                            if not temu_ok and st.session_state.get(f"temu_running_{sku}"):
-                                from modulo_upseller import editar_rascunho_plataforma
-                                add_log("→ Editando rascunho Temu...")
-                                ok5, msg5 = editar_rascunho_plataforma(driver, sku, p, "temu")
-                                add_log(msg5)
-                                if ok5:
-                                    st.session_state[f"temu_ok_{sku}"] = True
-                                    add_log("✅ Temu publicado!")
-                                registrar_evento_pipeline_bq(
-                                    client_bq_pipeline, p.get('id'), sku, nome, p.get('categoria'),
-                                    "temu", "ok" if st.session_state.get(f"temu_ok_{sku}") else "erro", msg5
-                                )
-                                st.session_state[f"temu_running_{sku}"] = False
-                                st.rerun()
-
-                            # ── TIKTOK ──────────────────────────────
-                            tiktok_ok = st.session_state.get(f"tiktok_ok_{sku}", False)
-                            col_tk1, _ = st.columns(2)
-                            with col_tk1:
-                                if tiktok_ok:
-                                    st.success("✅ TikTok")
-                                elif not shopee_ok:
-                                    st.button("⚫ TikTok", key=f"tiktok_{idx}", disabled=True, use_container_width=True, help="Publique na Shopee primeiro")
-                                else:
-                                    if st.button("⚫ TikTok", key=f"tiktok_{idx}", use_container_width=True):
-                                        st.session_state[f"tiktok_running_{sku}"] = True
-                                        add_log("⚫ Iniciando TikTok...")
-                                        st.rerun()
-                            if not tiktok_ok and st.session_state.get(f"tiktok_running_{sku}"):
-                                from modulo_upseller import editar_rascunho_plataforma
-                                add_log("→ Editando rascunho TikTok...")
-                                ok5, msg5 = editar_rascunho_plataforma(driver, sku, p, "tiktok")
-                                add_log(msg5)
-                                if ok5:
-                                    st.session_state[f"tiktok_ok_{sku}"] = True
-                                    add_log("✅ TikTok publicado!")
-                                registrar_evento_pipeline_bq(
-                                    client_bq_pipeline, p.get('id'), sku, nome, p.get('categoria'),
-                                    "tiktok", "ok" if st.session_state.get(f"tiktok_ok_{sku}") else "erro", msg5
-                                )
-                                st.session_state[f"tiktok_running_{sku}"] = False
-                                st.rerun()
-
-                            # Status geral
-                            total_ok = sum([shopee_ok, shein_ok, temu_ok, tiktok_ok])
-                            if total_ok == 4:
-                                st.success("🎉 Publicado em todas!")
-                            elif total_ok > 0:
-                                st.caption(f"✅ {total_ok}/4 plataformas")
+                df_show_hist = df_view.rename(columns={
+                    "nome": "Nome",
+                    "categoria": "Categoria",
+                    "estoque": "Estoque",
+                    "preco": "Custo",
+                    "sku_upseller": "SKU",
+                    "imagem": "Foto",
+                    "data_primeira_leitura": "1ª Leitura",
+                    "data_ultima_leitura": "Última Leitura",
+                    "data_ultima_atualizacao": "Última Atualização",
+                })
+                colunas_exibir = [
+                    "Foto", "Nome", "Categoria", "Estoque", "Custo", "SKU",
+                    "1ª Leitura", "Última Leitura", "Última Atualização",
+                ]
+                st.dataframe(
+                    df_show_hist[colunas_exibir],
+                    use_container_width=True, hide_index=True,
+                    column_config={
+                        "Foto": st.column_config.ImageColumn("Foto", width="small"),
+                        "SKU": st.column_config.TextColumn("SKU"),
+                    }
+                )

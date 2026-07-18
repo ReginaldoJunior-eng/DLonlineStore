@@ -287,64 +287,9 @@ if st.session_state.logado and client_bq:
         st.error(f"Erro ao carregar base de produtos: {e}")
 
 # --- FUNÇÕES DE CÁLCULO ---
-def converter_custo_seguro(valor_raw):
-    if valor_raw is None or valor_raw == "": 
-        return 0.0
-    
-    if isinstance(valor_raw, (int, float)):
-        return float(valor_raw)
-        
-    s = str(valor_raw).replace('R$', '').replace(' ', '').strip()
-    try:
-        if ',' in s and '.' in s:
-            if s.find('.') < s.find(','):
-                s = s.replace('.', '').replace(',', '.')
-            else:
-                s = s.replace(',', '')
-        elif ',' in s:
-            s = s.replace(',', '.')
-        return float(s)
-    except: 
-        return 0.0
-
-def calcular_venda_completo(custo_aquisicao, margem_percentual, mkt):
-    imposto_tax = 0.06
-    margem_alvo = margem_percentual / 100
-    custo_embalagem = 1.00
-    if mkt == "shein":
-        comissao_mkt, taxa_fixa = 0.18, 5.0
-        divisor = 1 - (comissao_mkt + imposto_tax + margem_alvo)
-        preco = (custo_aquisicao + custo_embalagem + taxa_fixa) / divisor if divisor > 0 else 0
-        lucro = preco - (preco * comissao_mkt) - (preco * imposto_tax) - custo_aquisicao - custo_embalagem - taxa_fixa
-        return preco, lucro
-    elif mkt == "shopee":
-        def testar_faixa(comis, taxa):
-            div = 1 - (comis + imposto_tax + margem_alvo)
-            return (custo_aquisicao + custo_embalagem + taxa) / div if div > 0 else 0
-        p_venda = testar_faixa(0.20, 4.0)
-        if p_venda > 79.99:
-            p_venda = testar_faixa(0.14, 16.0)
-            if p_venda > 99.99:
-                p_venda = testar_faixa(0.14, 20.0)
-                if p_venda > 199.99: p_venda = testar_faixa(0.14, 26.0)
-        if p_venda <= 79.99: c_final, t_final = 0.20, 4.0
-        elif p_venda <= 99.99: c_final, t_final = 0.14, 16.0
-        elif p_venda <= 199.99: c_final, t_final = 0.14, 20.0
-        else: c_final, t_final = 0.14, 26.0
-        lucro = p_venda - (p_venda * c_final) - (p_venda * imposto_tax) - custo_aquisicao - custo_embalagem - t_final
-        return p_venda, lucro
-    elif mkt == "temu":
-        divisor = 1 - (imposto_tax + margem_alvo)
-        preco = (custo_aquisicao + custo_embalagem) / divisor if divisor > 0 else 0
-        lucro = preco - (preco * imposto_tax) - custo_aquisicao - custo_embalagem
-        return preco, lucro
-    elif mkt == "tiktok":
-        comissao_mkt, taxa_fixa = 0.12, 4.0
-        divisor = 1 - (comissao_mkt + imposto_tax + margem_alvo)
-        preco = (custo_aquisicao + custo_embalagem + taxa_fixa) / divisor if divisor > 0 else 0
-        lucro = preco - (preco * comissao_mkt) - (preco * imposto_tax) - custo_aquisicao - custo_embalagem - taxa_fixa
-        return preco, lucro
-    return 0, 0
+# Cálculo de preço/lucro fica num módulo neutro compartilhado com modulo_campineira.py
+# (ver calculos_marketplace.py — evita que um importe o outro como script principal).
+from calculos_marketplace import converter_custo_seguro, calcular_venda_completo
 
 # --- SIDEBAR PROFISSIONAL ---
 with st.sidebar:
@@ -420,7 +365,21 @@ with st.sidebar:
         # --- BLOCO DE NOTAS ---
         st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
         st.markdown('<p style="color: #9ca3af; font-size: 12px; font-weight: 600; text-transform: uppercase; margin-bottom: 12px;">Produtividade</p>', unsafe_allow_html=True)
-        with st.expander("📋 Bloco de Notas & Pendências", expanded=False):
+        # Botão de alternância manual em vez de st.expander — o expander nativo do
+        # Streamlit usa um ícone (fonte "Material Symbols" carregada via CDN) pra
+        # seta de abrir/fechar; quando essa fonte não carrega no navegador (ex:
+        # bloqueada por extensões como o Brave Shields), aparece o nome do ícone
+        # como texto cru ("arrow_down") em cima do título. Usando ▼/▲ (caracteres
+        # Unicode comuns, não dependem de fonte externa) isso não acontece.
+        if "sidebar_notas_aberto" not in st.session_state:
+            st.session_state["sidebar_notas_aberto"] = False
+
+        seta_notas = "▲" if st.session_state["sidebar_notas_aberto"] else "▼"
+        if st.button(f"📋 Bloco de Notas & Pendências {seta_notas}", use_container_width=True, key="btn_toggle_notas"):
+            st.session_state["sidebar_notas_aberto"] = not st.session_state["sidebar_notas_aberto"]
+            st.rerun()
+
+        if st.session_state["sidebar_notas_aberto"]:
             nova_nota_sb = st.text_input("Escreva uma nova nota:", key="input_nova_nota_sidebar", placeholder="Digite...")
             if st.button("📌 Adicionar Nota", use_container_width=True):
                 if nova_nota_sb.strip() != "":
@@ -433,14 +392,14 @@ with st.sidebar:
                         st.error(f"Erro ao salvar: {e}")
                 else:
                     st.warning("Digite algo antes de salvar.")
-            
+
             st.markdown('<p style="color: #9ca3af; font-size: 11px; margin: 12px 0 8px 0;">Pendências Ativas</p>', unsafe_allow_html=True)
-            
+
             try:
                 df_apoio = buscar_anotacoes_bq()
                 if not df_apoio.empty:
                     df_ativas = df_apoio[df_apoio['status_concluido'] == False]
-                    
+
                     if not df_ativas.empty:
                         for idx, row in df_ativas.iterrows():
                             if st.checkbox(row['anotacao'], key=f"sb_chk_{row['id']}"):
@@ -465,6 +424,13 @@ with st.sidebar:
             st.session_state.fin_acesso = False
             st.session_state.pg = "Início"
             st.rerun()
+
+    # --- RODAPÉ ---
+    st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
+    st.markdown(
+        '<p style="text-align: center; color: #6b7280; font-size: 11px; margin-top: 12px;">Desenvolvido por DataStream BI</p>',
+        unsafe_allow_html=True
+    )
 
 # --- LÓGICA DE PÁGINAS ---
 
@@ -1181,7 +1147,7 @@ elif st.session_state.pg == "Dashboard":
 # --- CAMPINEIRA ---
 elif st.session_state.pg == "Campineira":
     from modulo_campineira import pagina_campineira
-    pagina_campineira()
+    pagina_campineira(client_bq)
 
 # --- GESTÃO DE ESTOQUE ---
 elif st.session_state.pg == "Gestão de Estoque":
