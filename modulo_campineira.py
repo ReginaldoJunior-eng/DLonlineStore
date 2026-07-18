@@ -1017,6 +1017,82 @@ def _rodar_loja(driver, p, sku, nome, client_bq_pipeline, add_log, plataforma):
     return st.session_state.get(ok_key, False)
 
 # ============================================================
+# PUBLICAR UM PRODUTO NO ARMAZÉM (usado pelo botão individual e pela publicação em massa)
+# ============================================================
+
+def _publicar_um_produto_armazem(p, client_bq_pipeline):
+    """Roda o fluxo completo de publicar UM produto no Armazém: checa EAN
+    duplicado, publica no Upseller, gera SKU, registra em tb_sku_registrados,
+    tb_produtos e no histórico permanente, e grava o evento do pipeline. Salva o
+    resultado em st.session_state (mesmas chaves que o card usa pra mostrar
+    sucesso/erro persistente) — chamada tanto pelo botão "🚀 Publicar" individual
+    quanto pelo loop de "Publicar Selecionados" em massa. Retorna (sucesso, msg)."""
+    from modulo_upseller import publicar_produto_upseller
+    import json, os
+
+    # Valida o EAN ANTES de tentar publicar — evita mandar pro Upseller um
+    # cadastro que já sabemos que vai ser recusado com "código de barra já
+    # existe" (erro só aparecia depois de já ter gasto o SKU e a tentativa inteira).
+    sku_repetido = checar_ean_duplicado_bq(client_bq_pipeline, p.get('ean'))
+    if sku_repetido:
+        msg = f"❌ EAN {p.get('ean')} já usado no SKU {sku_repetido} — não publicado, pra evitar duplicidade."
+        st.session_state[f"pub_{p.get('id')}"] = False
+        st.session_state[f"pub_msg_{p.get('id')}"] = msg
+        return False, msg
+
+    driver = st.session_state.get("ups_driver")
+    sucesso, msg = publicar_produto_upseller(driver, p)
+    st.session_state[f"pub_{p.get('id')}"] = sucesso
+    st.session_state[f"pub_msg_{p.get('id')}"] = msg
+
+    sku_gerado = None
+    avisos_bq = []
+    if sucesso:
+        f_sku = "upseller_sku_counter.json"
+        if os.path.exists(f_sku):
+            with open(f_sku) as f:
+                num = json.load(f).get("contador", 1)
+            sku_gerado = f"RJ-{num:05d}"
+            st.session_state[f"pub_sku_{p.get('id')}"] = sku_gerado
+
+        # Registra o novo SKU (+ EAN) na base de controle — é o que
+        # checar_ean_duplicado_bq() consulta nas próximas publicações.
+        ok_sku_bq, erro_sku_bq = registrar_sku_bq(client_bq_pipeline, sku_gerado, p.get('ean'), p.get('id'), p.get('nome'))
+        if not ok_sku_bq:
+            avisos_bq.append(f"SKU não registrado no BigQuery: {erro_sku_bq}")
+
+        # Cria o produto em tb_produtos (mesma tabela do Cadastro manual) — uma
+        # linha por marketplace, mesmo SKU do Upseller.
+        ok_prod_bq, erro_prod_bq = registrar_produto_em_tb_produtos(
+            client_bq_pipeline, sku_gerado, p.get('nome'), p.get('preco_num')
+        )
+        if not ok_prod_bq:
+            avisos_bq.append(f"tb_produtos não atualizado: {erro_prod_bq}")
+
+        # Marca o SKU no histórico permanente — fica registrado ali até a
+        # próxima varredura reler esse produto.
+        ok_hist_sku, erro_hist_sku = marcar_sku_historico_bq(client_bq_pipeline, p.get('id'), sku_gerado)
+        if not ok_hist_sku:
+            avisos_bq.append(f"SKU não marcado no histórico: {erro_hist_sku}")
+
+    # Grava a etapa Armazém no BigQuery — garante que o produto continue
+    # aparecendo em "Enviar para Lojas" mesmo após F5/cache limpo. Se essa
+    # gravação falhar (ex: tabela não existe), avisa em vez de engolir
+    # silenciosamente — foi assim que a tabela ficou vazia sem ninguém perceber.
+    ok_evento_bq, erro_evento_bq = registrar_evento_pipeline_bq(
+        client_bq_pipeline, p.get('id'), sku_gerado, p.get('nome'),
+        p.get('categoria'), "armazem", "ok" if sucesso else "erro", msg
+    )
+    if not ok_evento_bq:
+        avisos_bq.append(f"Evento do pipeline não registrado: {erro_evento_bq}")
+
+    if avisos_bq:
+        msg = msg + " ⚠️ " + " | ".join(avisos_bq)
+        st.session_state[f"pub_msg_{p.get('id')}"] = msg
+
+    return sucesso, msg
+
+# ============================================================
 # CARD DE PUBLICAÇÃO POR LOJA (Shopee/Shein/Temu/TikTok)
 # ============================================================
 
@@ -1707,8 +1783,13 @@ def pagina_campineira(client_bq=None):
                         col_p4.metric("⚫ TikTok", f"R$ {p.get('preco_tiktok', 0):.2f}")
 
                     with col_btn:
-                        st.markdown("<div style='padding-top:20px'></div>", unsafe_allow_html=True)
                         publicado = st.session_state.get(f"pub_{p.get('id')}", False)
+                        # Checkbox de seleção pra publicação em massa — só faz sentido
+                        # pra quem pode ser publicado e ainda não foi.
+                        if permitir_publicar and not publicado:
+                            st.checkbox("Selecionar", key=f"sel_pub_{p.get('id')}", label_visibility="visible")
+                        else:
+                            st.markdown("<div style='padding-top:20px'></div>", unsafe_allow_html=True)
                         if publicado:
                             msg = st.session_state.get(f"pub_msg_{p.get('id')}", "✅ Publicado!")
                             st.success(msg)
@@ -1725,75 +1806,8 @@ def pagina_campineira(client_bq=None):
                                 st.error(f"⛔ {erro_anterior}")
                             if st.button("🚀 Publicar", key=f"btn_pub_{idx}", use_container_width=True, type="primary"):
                                 with st.spinner("Publicando..."):
-                                    from modulo_upseller import publicar_produto_upseller, get_proximo_sku
-
-                                    # Valida o EAN ANTES de tentar publicar — evita mandar pro
-                                    # Upseller um cadastro que já sabemos que vai ser recusado
-                                    # com "código de barra já existe" (erro só aparecia depois
-                                    # de já ter gasto o SKU e a tentativa inteira).
-                                    sku_repetido = checar_ean_duplicado_bq(client_bq_pipeline, p.get('ean'))
-                                    if sku_repetido:
-                                        sucesso = False
-                                        msg = f"❌ EAN {p.get('ean')} já usado no SKU {sku_repetido} — não publicado, pra evitar duplicidade."
-                                        st.session_state[f"pub_{p.get('id')}"] = False
-                                        st.session_state[f"pub_msg_{p.get('id')}"] = msg
-                                        st.rerun()
-
-                                    driver = st.session_state.get("ups_driver")
-                                    sucesso, msg = publicar_produto_upseller(driver, p)
-                                    st.session_state[f"pub_{p.get('id')}"] = sucesso
-                                    st.session_state[f"pub_msg_{p.get('id')}"] = msg
-                                    # Salva SKU gerado para usar na etapa 2
-                                    sku_gerado = None
-                                    avisos_bq = []
-                                    if sucesso:
-                                        import json, os
-                                        f_sku = "upseller_sku_counter.json"
-                                        if os.path.exists(f_sku):
-                                            with open(f_sku) as f:
-                                                num = json.load(f).get("contador", 1)
-                                            sku_gerado = f"RJ-{num:05d}"
-                                            st.session_state[f"pub_sku_{p.get('id')}"] = sku_gerado
-                                        # Registra o novo SKU (+ EAN) na base de controle — é o que
-                                        # checar_ean_duplicado_bq() consulta nas próximas publicações.
-                                        ok_sku_bq, erro_sku_bq = registrar_sku_bq(client_bq_pipeline, sku_gerado, p.get('ean'), p.get('id'), p.get('nome'))
-                                        if not ok_sku_bq:
-                                            avisos_bq.append(f"SKU não registrado no BigQuery: {erro_sku_bq}")
-
-                                        # Cria o produto em tb_produtos (mesma tabela do Cadastro
-                                        # manual) — uma linha por marketplace, mesmo SKU do Upseller.
-                                        ok_prod_bq, erro_prod_bq = registrar_produto_em_tb_produtos(
-                                            client_bq_pipeline, sku_gerado, p.get('nome'), p.get('preco_num')
-                                        )
-                                        if not ok_prod_bq:
-                                            avisos_bq.append(f"tb_produtos não atualizado: {erro_prod_bq}")
-
-                                        # Marca o SKU no histórico permanente — fica registrado ali até
-                                        # a próxima varredura reler esse produto.
-                                        ok_hist_sku, erro_hist_sku = marcar_sku_historico_bq(client_bq_pipeline, p.get('id'), sku_gerado)
-                                        if not ok_hist_sku:
-                                            avisos_bq.append(f"SKU não marcado no histórico: {erro_hist_sku}")
-
-                                    # Grava a etapa Armazém no BigQuery — garante que o produto
-                                    # continue aparecendo em "Enviar para Lojas" mesmo após F5/cache limpo.
-                                    # Se essa gravação falhar (ex: tabela não existe), avisa em vez de
-                                    # engolir silenciosamente — foi assim que a tabela ficou vazia sem
-                                    # ninguém perceber.
-                                    ok_evento_bq, erro_evento_bq = registrar_evento_pipeline_bq(
-                                        client_bq_pipeline, p.get('id'), sku_gerado, p.get('nome'),
-                                        p.get('categoria'), "armazem", "ok" if sucesso else "erro", msg
-                                    )
-                                    if not ok_evento_bq:
-                                        avisos_bq.append(f"Evento do pipeline não registrado: {erro_evento_bq}")
-
-                                    # st.warning() aqui seria apagado pelo st.rerun() logo abaixo antes
-                                    # de alguém ver — em vez disso, anexa ao msg persistente que já é
-                                    # mostrado toda vez que o card renderiza (mesmo padrão do erro de
-                                    # publicação).
-                                    if avisos_bq:
-                                        msg = msg + " ⚠️ " + " | ".join(avisos_bq)
-                                        st.session_state[f"pub_msg_{p.get('id')}"] = msg
-                                    st.rerun()
+                                    _publicar_um_produto_armazem(p, client_bq_pipeline)
+                                st.rerun()
                         else:
                             st.button("🔒 Publicar", key=f"btn_pub_dis_{idx}", disabled=True,
                                       use_container_width=True, help="Faça login no Upseller primeiro")
@@ -1819,6 +1833,29 @@ def pagina_campineira(client_bq=None):
                 if excluidos and st.button("↩️ Restaurar removidos", use_container_width=True):
                     st.session_state["pub_excluidos"] = set()
                     salvar_excluidos(set())
+                    st.rerun()
+
+            # Publicação em massa — marca "Selecionar" em vários cards e publica
+            # todos de uma vez, um atrás do outro (mesma função do botão individual).
+            selecionados = [
+                p for p in validados_com_imagem
+                if st.session_state.get(f"sel_pub_{p.get('id')}") and not st.session_state.get(f"pub_{p.get('id')}")
+            ]
+            if selecionados:
+                if not st.session_state.get("ups_logado"):
+                    st.warning(f"🔒 {len(selecionados)} selecionado(s) — faça login no Upseller pra publicar em massa.")
+                elif st.button(f"🚀 Publicar Selecionados ({len(selecionados)})", type="primary", use_container_width=True):
+                    progresso = st.progress(0.0)
+                    log_massa = st.empty()
+                    linhas_log = []
+                    for i, p in enumerate(selecionados):
+                        linhas_log.append(f"→ Publicando {p.get('nome', '')[:60]}...")
+                        log_massa.markdown("  \n".join(linhas_log[-8:]))
+                        sucesso, msg = _publicar_um_produto_armazem(p, client_bq_pipeline)
+                        linhas_log[-1] = f"{'✅' if sucesso else '❌'} {p.get('nome', '')[:60]} — {msg[:100]}"
+                        log_massa.markdown("  \n".join(linhas_log[-8:]))
+                        st.session_state[f"sel_pub_{p.get('id')}"] = False
+                        progresso.progress((i + 1) / len(selecionados))
                     st.rerun()
 
             for idx, p in enumerate(validados_com_imagem):

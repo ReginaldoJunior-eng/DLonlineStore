@@ -55,7 +55,10 @@ def calcular_venda_completo(custo_aquisicao, margem_percentual, mkt):
         lucro = p_venda - (p_venda * c_final) - (p_venda * imposto_tax) - custo_aquisicao - custo_embalagem - t_final
         return p_venda, lucro
     elif mkt == "temu":
-        divisor = 1 - (imposto_tax + margem_alvo)
+        # Margem do Temu é FIXA em 30% — ignora o margem_percentual recebido (que
+        # continua valendo normalmente pras outras 3 plataformas).
+        margem_temu = 0.30
+        divisor = 1 - (imposto_tax + margem_temu)
         preco = (custo_aquisicao + custo_embalagem) / divisor if divisor > 0 else 0
         lucro = preco - (preco * imposto_tax) - custo_aquisicao - custo_embalagem
         return preco, lucro
