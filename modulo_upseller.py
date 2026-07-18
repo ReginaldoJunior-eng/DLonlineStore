@@ -159,6 +159,19 @@ def ler_captcha_ocr(driver):
 
 # ── DRIVER ────────────────────────────────────────────────────────────────────
 
+def _chromium_do_sistema():
+    """Detecta automaticamente o Chromium instalado via packages.txt (Streamlit
+    Cloud/Debian) — em vez de depender de uma secret configurada manualmente
+    (frágil: fácil esquecer, errar a ordem no TOML, ou não reiniciar o app depois).
+    Retorna (caminho_binario, caminho_chromedriver) ou (None, None) se não achar."""
+    import os
+    for bin_path in ["/usr/bin/chromium", "/usr/bin/chromium-browser"]:
+        if os.path.exists(bin_path):
+            for drv_path in ["/usr/bin/chromedriver", "/usr/lib/chromium/chromedriver", "/usr/lib/chromium-browser/chromedriver"]:
+                if os.path.exists(drv_path):
+                    return bin_path, drv_path
+    return None, None
+
 def criar_driver():
     from selenium import webdriver
     from selenium.webdriver.chrome.service import Service
@@ -167,17 +180,17 @@ def criar_driver():
     opts.add_argument("--no-sandbox")
     opts.add_argument("--disable-dev-shm-usage")
 
-    # Ativa headless só quando st.secrets["headless"] = true (configurado na nuvem,
-    # ausente/false local) — mantém o Chrome VISÍVEL localmente (de propósito, pra
-    # dar pra acompanhar onde trava), e usa o Chromium instalado via packages.txt no
-    # Streamlit Cloud (não o webdriver_manager, que tenta casar versão do "Google
-    # Chrome" e não bate certo com o Chromium do Debian).
-    if st.secrets.get("headless", False):
+    # Se existe um Chromium instalado no sistema (packages.txt no Streamlit Cloud),
+    # usa ele direto e roda headless — é sinal de que estamos num servidor sem tela.
+    # Localmente esse caminho não existe, então cai no Chrome normal (visível, via
+    # webdriver_manager) sem precisar configurar nada.
+    bin_path, drv_path = _chromium_do_sistema()
+    if bin_path and drv_path:
         opts.add_argument("--headless=new")
         opts.add_argument("--disable-gpu")
         opts.add_argument("--window-size=1920,1080")
-        opts.binary_location = "/usr/bin/chromium"
-        return webdriver.Chrome(service=Service("/usr/bin/chromedriver"), options=opts)
+        opts.binary_location = bin_path
+        return webdriver.Chrome(service=Service(drv_path), options=opts)
 
     from webdriver_manager.chrome import ChromeDriverManager
     return webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=opts)

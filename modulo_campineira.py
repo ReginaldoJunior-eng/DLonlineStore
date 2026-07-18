@@ -646,12 +646,14 @@ def rodar_rpa_background(filtros_cat, cats_varrer=None, buscar_detalhes=False):
         opts.add_argument("--disable-dev-shm-usage")
         opts.add_argument("--window-size=1920,1080")
 
-        if st.secrets.get("headless", False):
-            # Nuvem: usa o Chromium/chromedriver instalados via packages.txt (apt),
-            # não o webdriver_manager — ele tenta casar versão do "Google Chrome" e
-            # não bate certo com o Chromium do Debian usado no Streamlit Cloud.
-            opts.binary_location = "/usr/bin/chromium"
-            driver = webdriver.Chrome(service=Service("/usr/bin/chromedriver"), options=opts)
+        # Detecta automaticamente o Chromium do sistema (packages.txt no Streamlit
+        # Cloud) — sem depender de secret configurada à mão. Local, esse caminho não
+        # existe, então cai no webdriver_manager normal.
+        from modulo_upseller import _chromium_do_sistema
+        bin_path, drv_path = _chromium_do_sistema()
+        if bin_path and drv_path:
+            opts.binary_location = bin_path
+            driver = webdriver.Chrome(service=Service(drv_path), options=opts)
         else:
             driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=opts)
 
