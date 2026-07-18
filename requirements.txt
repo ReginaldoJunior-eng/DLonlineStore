@@ -1,6 +1,7 @@
 streamlit
 pandas
 google-cloud-bigquery
+db-dtypes
 google-auth
 plotly
 openpyxl
