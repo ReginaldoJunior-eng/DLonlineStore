@@ -6,6 +6,22 @@ importar dele a partir de outro módulo re-executa o arquivo inteiro (sidebar,
 botões, tudo) como efeito colateral do import — causando IDs de widget duplicados.
 """
 
+import re
+
+
+def obter_sku_base(sku):
+    """Extrai o SKU 'principal' de uma variante — ex: CP-784-AM (cor Âmbar) vira
+    CP-784. Regra: PREFIXO-NÚMERO seguido de um hífen e mais alguma coisa (letra,
+    cor, código) é sempre uma variante do produto PREFIXO-NÚMERO; tudo depois do
+    segundo hífen é a parte variável e não define um custo próprio — o custo de
+    aquisição é o mesmo do principal. SKU sem esse padrão (ex: sem segundo hífen)
+    volta como veio. Usado como fallback quando a variante exata não tem custo
+    cadastrado em tb_produtos, mas o principal tem."""
+    if not sku:
+        return sku
+    m = re.match(r'^([A-Za-z]+-\d+)-.+$', sku.strip())
+    return m.group(1) if m else sku.strip()
+
 
 def converter_custo_seguro(valor_raw):
     if valor_raw is None or valor_raw == "":
@@ -69,3 +85,28 @@ def calcular_venda_completo(custo_aquisicao, margem_percentual, mkt):
         lucro = preco - (preco * comissao_mkt) - (preco * imposto_tax) - custo_aquisicao - custo_embalagem - taxa_fixa
         return preco, lucro
     return 0, 0
+
+
+def calcular_lucro_realizado(preco_venda, custo_aquisicao, mkt):
+    """Calcula o lucro líquido de uma venda JÁ REALIZADA, a partir do preço de
+    venda de verdade — diferente de calcular_venda_completo (que resolve pra um
+    preço-alvo dada uma margem desejada), aqui o preço já é conhecido (veio de um
+    pedido de verdade, ex: importado do Upseller) e só precisamos descontar as
+    mesmas taxas/comissões de cada plataforma. Retorna o lucro em R$."""
+    imposto_tax = 0.06
+    custo_embalagem = 1.00
+    mkt = (mkt or "").lower()
+    if mkt == "shein":
+        comissao, taxa_fixa = 0.18, 5.0
+    elif mkt == "shopee":
+        if preco_venda <= 79.99: comissao, taxa_fixa = 0.20, 4.0
+        elif preco_venda <= 99.99: comissao, taxa_fixa = 0.14, 16.0
+        elif preco_venda <= 199.99: comissao, taxa_fixa = 0.14, 20.0
+        else: comissao, taxa_fixa = 0.14, 26.0
+    elif mkt == "tiktok":
+        comissao, taxa_fixa = 0.12, 4.0
+    else:
+        # Temu (e qualquer plataforma não mapeada): sem comissão própria, só imposto.
+        comissao, taxa_fixa = 0.0, 0.0
+    custo_aquisicao = custo_aquisicao or 0
+    return preco_venda - (preco_venda * comissao) - (preco_venda * imposto_tax) - custo_aquisicao - custo_embalagem - taxa_fixa
