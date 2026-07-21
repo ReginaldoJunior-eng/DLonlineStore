@@ -14,6 +14,7 @@ UPSELLER_URL   = "https://app.upseller.com/pt/home"
 UPSELLER_EMAIL = "vendas.dlonlinestore@gmail.com"
 UPSELLER_SENHA = "@Gele1826"
 COOKIES_FILE   = "upseller_cookies.json"
+TABLE_SESSAO_UPSELLER = "leandro-marketplace.DL_Store_Online.tb_upseller_sessao"
 
 SEL_EMAIL    = "#app > div:nth-child(2) > div.page_layout > div.page_module_box > div.page_module > form > div:nth-child(2) > div > div > span > input"
 SEL_SENHA    = "#app > div:nth-child(2) > div.page_layout > div.page_module_box > div.page_module > form > div:nth-child(3) > div > div > span > span.ant-input-affix-wrapper.ant-input-password > input"
@@ -26,32 +27,83 @@ SEL_POPUP_CLOSE   = "body > div:nth-child(23) > div > div.ant-modal-wrap > div >
 SEL_POPUP_AVISOS  = "body > div:nth-child(26) > div > div.ant-modal-wrap > div > div.ant-modal-content > button"
 
 # ── COOKIES ──────────────────────────────────────────────────────────────────
+# Sessão do Upseller salva pra sobreviver a F5 (login automático). Prioriza
+# BigQuery (tb_upseller_sessao) — o arquivo local (COOKIES_FILE) é apagado toda
+# vez que o Streamlit Cloud reinicia o container, o que forçava login manual de
+# novo depois de qualquer redeploy/restart mesmo com a sessão ainda válida.
+# O arquivo local só entra como fallback se o BigQuery estiver indisponível.
 
-def salvar_cookies(driver):
+def _carregar_cookies_salvos(client=None):
+    """Retorna a lista de cookies salva, ou None se não tiver nenhuma sessão."""
+    if client:
+        try:
+            df = client.query(
+                f"SELECT cookies_json FROM `{TABLE_SESSAO_UPSELLER}` WHERE id = 'cookies'"
+            ).to_dataframe()
+            if not df.empty:
+                return json.loads(df.iloc[0]["cookies_json"])
+        except Exception:
+            pass
+    if os.path.exists(COOKIES_FILE):
+        try:
+            with open(COOKIES_FILE) as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return None
+
+def existe_sessao_salva(client=None):
+    return _carregar_cookies_salvos(client) is not None
+
+def salvar_cookies(driver, client=None):
+    try:
+        cookies = driver.get_cookies()
+    except Exception:
+        return False
+    if client:
+        try:
+            import pandas as pd
+            from google.cloud import bigquery
+            from datetime import datetime
+            df = pd.DataFrame([{
+                "id": "cookies",
+                "cookies_json": json.dumps(cookies),
+                "data_atualizacao": datetime.utcnow().isoformat(),
+            }])
+            job_config = bigquery.LoadJobConfig(write_disposition="WRITE_TRUNCATE")
+            client.load_table_from_dataframe(df, TABLE_SESSAO_UPSELLER, job_config=job_config).result()
+            return True
+        except Exception:
+            pass
     try:
         with open(COOKIES_FILE, "w") as f:
-            json.dump(driver.get_cookies(), f)
+            json.dump(cookies, f)
         return True
     except:
         return False
 
-def login_por_cookies(driver):
-    if not os.path.exists(COOKIES_FILE):
+def login_por_cookies(driver, client=None):
+    cookies = _carregar_cookies_salvos(client)
+    if cookies is None:
         return False
     try:
         driver.get(UPSELLER_URL)
         time.sleep(2)
-        with open(COOKIES_FILE) as f:
-            for cookie in json.load(f):
-                try: driver.add_cookie(cookie)
-                except: pass
+        for cookie in cookies:
+            try: driver.add_cookie(cookie)
+            except: pass
         driver.refresh()
         time.sleep(3)
         return "login" not in driver.current_url
     except:
         return False
 
-def deletar_cookies():
+def deletar_cookies(client=None):
+    if client:
+        try:
+            client.query(f"DELETE FROM `{TABLE_SESSAO_UPSELLER}` WHERE id = 'cookies'").result()
+        except Exception:
+            pass
     try: os.remove(COOKIES_FILE)
     except: pass
 
@@ -172,13 +224,25 @@ def _chromium_do_sistema():
                     return bin_path, drv_path
     return None, None
 
-def criar_driver():
+def criar_driver(pasta_download=None):
     from selenium import webdriver
     from selenium.webdriver.chrome.service import Service
     from selenium.webdriver.chrome.options import Options
     opts = Options()
     opts.add_argument("--no-sandbox")
     opts.add_argument("--disable-dev-shm-usage")
+
+    # Pasta de download fixa (em vez da pasta padrão do usuário) — usado pela
+    # exportação de pedidos, pra sabermos exatamente onde o Excel baixado vai parar.
+    if pasta_download:
+        import os
+        os.makedirs(pasta_download, exist_ok=True)
+        opts.add_experimental_option("prefs", {
+            "download.default_directory": os.path.abspath(pasta_download),
+            "download.prompt_for_download": False,
+            "download.directory_upgrade": True,
+            "safebrowsing.enabled": True,
+        })
 
     # Se existe um Chromium instalado no sistema (packages.txt no Streamlit Cloud),
     # usa ele direto e roda headless — é sinal de que estamos num servidor sem tela.
@@ -190,10 +254,22 @@ def criar_driver():
         opts.add_argument("--disable-gpu")
         opts.add_argument("--window-size=1920,1080")
         opts.binary_location = bin_path
-        return webdriver.Chrome(service=Service(drv_path), options=opts)
+        driver = webdriver.Chrome(service=Service(drv_path), options=opts)
+    else:
+        from webdriver_manager.chrome import ChromeDriverManager
+        driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=opts)
 
-    from webdriver_manager.chrome import ChromeDriverManager
-    return webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=opts)
+    if pasta_download:
+        # Chrome headless (novo modo) bloqueia download por segurança a não ser que
+        # seja liberado explicitamente via CDP — as "prefs" sozinhas não bastam nesse modo.
+        try:
+            driver.execute_cdp_cmd("Page.setDownloadBehavior", {
+                "behavior": "allow",
+                "downloadPath": os.path.abspath(pasta_download),
+            })
+        except Exception:
+            pass
+    return driver
 
 def driver_esta_vivo(driver):
     """Confirma se a sessão do Chrome por trás do driver ainda existe (não foi
@@ -208,15 +284,15 @@ def driver_esta_vivo(driver):
     except Exception:
         return False
 
-def _tentar_reconectar_via_cookies():
+def _tentar_reconectar_via_cookies(client=None):
     """Recria o driver e loga de novo usando os cookies salvos, sem exigir login
     manual — usado quando a sessão anterior morreu (Chrome fechado, travado etc.)
     mas ainda temos uma sessão válida guardada. Retorna o novo driver ou None."""
-    if not os.path.exists(COOKIES_FILE):
+    if not existe_sessao_salva(client):
         return None
     try:
         novo_driver = criar_driver()
-        if login_por_cookies(novo_driver):
+        if login_por_cookies(novo_driver, client):
             fechar_popup(novo_driver)
             novo_driver.minimize_window()
             return novo_driver
@@ -236,7 +312,7 @@ def _ups_estado_global():
 
 # ── WIDGET PRINCIPAL ──────────────────────────────────────────────────────────
 
-def widget_login_upseller():
+def widget_login_upseller(client=None):
     st.markdown("#### 🔐 Login Upseller")
 
     estado_global = _ups_estado_global()
@@ -251,7 +327,7 @@ def widget_login_upseller():
     # fica "achando" que está logado e qualquer ação trava sem feedback (fica no limbo).
     if estado_global["logado"] and not driver_esta_vivo(estado_global["driver"]):
         with st.spinner("🍪 Sessão anterior foi perdida — reconectando com os cookies salvos..."):
-            novo_driver = _tentar_reconectar_via_cookies()
+            novo_driver = _tentar_reconectar_via_cookies(client)
         if novo_driver:
             estado_global["driver"] = novo_driver
             estado_global["logado"] = True
@@ -280,7 +356,7 @@ def widget_login_upseller():
 
     # ── ETAPA 0: Inicial ─────────────────────────────────────────
     if etapa == 0:
-        tem_cookies = os.path.exists(COOKIES_FILE)
+        tem_cookies = existe_sessao_salva(client)
 
         if tem_cookies:
             st.info("🍪 Sessão anterior encontrada!")
@@ -289,7 +365,7 @@ def widget_login_upseller():
                 if st.button("⚡ Login Automático", type="primary", use_container_width=True):
                     with st.spinner("Restaurando sessão..."):
                         driver = criar_driver()
-                        if login_por_cookies(driver):
+                        if login_por_cookies(driver, client):
                             fechar_popup(driver)
                             driver.minimize_window()
                             st.session_state["ups_driver"] = driver
@@ -300,12 +376,12 @@ def widget_login_upseller():
                             st.rerun()
                         else:
                             driver.quit()
-                            deletar_cookies()
+                            deletar_cookies(client)
                             st.warning("⚠️ Sessão expirada. Faça login manual.")
                             st.rerun()
             with col2:
                 if st.button("🌐 Login Manual", use_container_width=True):
-                    deletar_cookies()
+                    deletar_cookies(client)
                     st.session_state["ups_etapa"] = 1
                     st.rerun()
         else:
@@ -388,7 +464,7 @@ def widget_login_upseller():
                             st.rerun()
                         elif "login" not in url:
                             fechar_popup(driver)
-                            salvar_cookies(driver)
+                            salvar_cookies(driver, client)
                             driver.minimize_window()
                             st.session_state["ups_logado"] = True
                             st.session_state["ups_etapa"] = 3
@@ -453,7 +529,7 @@ def widget_login_upseller():
                             btn.click(); break
                     time.sleep(4)
                     if "login" not in driver.current_url:
-                        salvar_cookies(driver)
+                        salvar_cookies(driver, client)
                         driver.minimize_window()
                         st.session_state["ups_logado"] = True
                         st.session_state["ups_etapa"] = 3
@@ -475,7 +551,7 @@ def widget_login_upseller():
             if st.button("🚪 Desconectar", use_container_width=True):
                 try: st.session_state["ups_driver"].quit()
                 except: pass
-                deletar_cookies()
+                deletar_cookies(client)
                 st.session_state["ups_driver"] = None
                 st.session_state["ups_logado"] = False
                 st.session_state["ups_etapa"] = 0
@@ -484,7 +560,7 @@ def widget_login_upseller():
                 st.rerun()
         with c2:
             if st.button("🗑️ Limpar sessão salva", use_container_width=True):
-                deletar_cookies()
+                deletar_cookies(client)
                 st.info("Cookies removidos.")
         return st.session_state["ups_driver"]
 
@@ -496,8 +572,29 @@ def widget_login_upseller():
 
 SKU_COUNTER_FILE = "upseller_sku_counter.json"
 
-def get_proximo_sku():
-    """Retorna próximo SKU no formato RJ-00001, RJ-00002..."""
+def get_proximo_sku(client=None):
+    """Retorna o próximo SKU no formato RJ-00001, RJ-00002... Consulta o maior
+    número já registrado em tb_sku_registrados (BigQuery) em vez de um contador
+    em arquivo local — o arquivo local é apagado toda vez que o Streamlit Cloud
+    reinicia o container, o que fazia o contador "esquecer" a posição e reemitir
+    SKUs que já tinham sido usados de verdade no Upseller (causa real do erro
+    "SKU já existe" em produção, mesmo sem ninguém ter reaproveitado nada à mão).
+    tb_sku_registrados nunca é limpa, então sempre reflete a realidade.
+    Só cai pro arquivo local se o BigQuery estiver indisponível (fallback, não
+    fonte principal — nesse caso o número pode ficar defasado de novo)."""
+    if client:
+        try:
+            q = """
+                SELECT MAX(CAST(SUBSTR(sku, 4) AS INT64)) AS max_num
+                FROM `leandro-marketplace.DL_Store_Online.tb_sku_registrados`
+                WHERE sku LIKE 'RJ-%'
+            """
+            df = client.query(q).to_dataframe()
+            max_num = df["max_num"].iloc[0]
+            num = int(max_num or 0) + 1
+            return f"RJ-{num:05d}"
+        except Exception:
+            pass
     try:
         if os.path.exists(SKU_COUNTER_FILE):
             with open(SKU_COUNTER_FILE) as f:
@@ -650,16 +747,23 @@ def processar_e_enviar_imagem(driver, imagem_url):
     except Exception as e:
         return f"erro ao processar imagem: {str(e)[:80]}"
 
-def publicar_produto_upseller(driver, produto):
+def publicar_produto_upseller(driver, produto, client=None):
     """
     Publica um produto no Upseller.
-    Retorna (sucesso, mensagem)
+    client: conexão BigQuery, passada pra get_proximo_sku() gerar o SKU a partir
+    de tb_sku_registrados (fonte confiável) em vez de um contador local.
+    Retorna (sucesso, mensagem, sku_usado) — sku_usado é o mesmo valor que foi
+    de fato digitado no formulário do Upseller (ou None se o erro aconteceu antes
+    de gerar um), pra quem chamar não precisar reconsultar o contador por conta
+    própria (fonte de uma divergência real vista em produção).
     """
     from selenium.webdriver.common.by import By
     from selenium.webdriver.support.ui import WebDriverWait
     from selenium.webdriver.support import expected_conditions as EC
     from selenium.webdriver.common.keys import Keys
     import time
+
+    sku = None
 
     wait = WebDriverWait(driver, 15)
 
@@ -673,7 +777,7 @@ def publicar_produto_upseller(driver, produto):
         time.sleep(1)
 
         # ── SKU ────────────────────────────────────────────────
-        sku = get_proximo_sku()
+        sku = get_proximo_sku(client)
         campo_sku = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR,
             "#basic > div.ant-card-body > div > form > div:nth-child(1) > div.ant-col.ant-col-15.ant-form-item-control-wrapper > div > span > input"
         )))
@@ -801,130 +905,13 @@ def publicar_produto_upseller(driver, produto):
             return null;
         """)
         if erro_validacao:
-            return False, f"❌ {erro_validacao}"
+            return False, f"❌ {erro_validacao}", sku
 
         aviso_imagem = "" if imagem_status == "imagem enviada" else f" ⚠️ Imagem: {imagem_status}."
-        return True, f"✅ Produto '{nome}' publicado! SKU: {sku}.{aviso_imagem}"
+        return True, f"✅ Produto '{nome}' publicado! SKU: {sku}.{aviso_imagem}", sku
 
     except Exception as e:
-        return False, f"❌ Erro: {str(e)[:100]}"
-
-def reprocessar_imagem_armazem(driver, sku, imagem_url):
-    """
-    Abre o anúncio JÁ EXISTENTE no Armazém pelo SKU (usando o campo de busca da
-    lista, não cria um cadastro novo) e reenvia só a imagem, usando a mesma lógica
-    de redimensionamento de publicar_produto_upseller(). Usado para corrigir
-    produtos que já foram publicados mas ficaram sem foto ou com foto rejeitada.
-    Retorna (sucesso: bool, mensagem: str).
-    """
-    from selenium.webdriver.common.by import By
-    from selenium.webdriver.support.ui import WebDriverWait
-    from selenium.webdriver.support import expected_conditions as EC
-    from selenium.webdriver.common.keys import Keys
-    import time
-
-    wait = WebDriverWait(driver, 15)
-
-    try:
-        driver.get("https://app.upseller.com/pt/products/product-list?productType=single")
-        time.sleep(3)
-        fechar_popup(driver)
-
-        # Usa o campo de busca da tela pra achar o SKU rápido (a lista pode ter
-        # centenas/milhares de produtos)
-        campo_busca = None
-        for sel in [
-            "input[placeholder*='múltiplas']",
-            "input[placeholder*='SKU']",
-            "input[placeholder*='sku']",
-            ".ant-input-search input",
-        ]:
-            try:
-                el = driver.find_element(By.CSS_SELECTOR, sel)
-                if el.is_displayed():
-                    campo_busca = el
-                    break
-            except:
-                continue
-
-        if campo_busca:
-            campo_busca.click()
-            campo_busca.send_keys(Keys.CONTROL + "a")
-            campo_busca.send_keys(Keys.DELETE)
-            campo_busca.send_keys(sku)
-            campo_busca.send_keys(Keys.ENTER)
-            time.sleep(2)
-
-        # Localiza a linha do SKU em qualquer <tr> da página (mesma estratégia
-        # usada na migração — não depende de um caminho de tabela fixo)
-        linha = driver.execute_script("""
-            var alvo = arguments[0].trim();
-            var linhas = document.querySelectorAll('tr');
-            for (var tr of linhas) {
-                if (tr.textContent.includes(alvo)) return tr;
-            }
-            return null;
-        """, sku)
-
-        if not linha:
-            return False, f"❌ SKU {sku} não encontrado no Armazém"
-
-        # Clica no link "Editar" dentro dessa linha
-        handles_antes = len(driver.window_handles)
-        editou = driver.execute_script("""
-            var linha = arguments[0];
-            var links = linha.querySelectorAll('a');
-            for (var a of links) {
-                if (a.textContent.trim().toLowerCase() === 'editar') {
-                    a.click();
-                    return true;
-                }
-            }
-            return false;
-        """, linha)
-
-        if not editou:
-            return False, f"❌ Link 'Editar' não encontrado na linha do SKU {sku}"
-
-        time.sleep(3)
-        # Se abriu em aba nova, troca o foco pra ela
-        if len(driver.window_handles) > handles_antes:
-            driver.switch_to.window(driver.window_handles[-1])
-        fechar_popup(driver)
-
-        status_imagem = processar_e_enviar_imagem(driver, imagem_url)
-
-        # Salva
-        driver.execute_script("window.scrollTo(0, 0);")
-        time.sleep(1)
-        try:
-            btn_salvar = wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR,
-                "#myEditBox > section.my_edit_head.ant-layout > div > div.head_r > div > button"
-            )))
-            btn_salvar.click()
-            time.sleep(3)
-        except Exception:
-            if len(driver.window_handles) > handles_antes:
-                driver.close()
-                driver.switch_to.window(driver.window_handles[-1])
-            return False, f"❌ Imagem processada ({status_imagem}) mas não achou o botão Salvar"
-
-        if len(driver.window_handles) > handles_antes:
-            driver.close()
-            driver.switch_to.window(driver.window_handles[-1])
-
-        if status_imagem != "imagem enviada":
-            return False, f"⚠️ Reprocessado, mas imagem ainda com problema: {status_imagem}"
-        return True, f"✅ Imagem reenviada para o SKU {sku}"
-
-    except Exception as e:
-        try:
-            if len(driver.window_handles) > 1:
-                driver.close()
-                driver.switch_to.window(driver.window_handles[-1])
-        except:
-            pass
-        return False, f"❌ Erro ao reprocessar imagem: {str(e)[:100]}"
+        return False, f"❌ Erro: {str(e)[:100]}", sku
 
 # ============================================================
 # CONFIRMAÇÃO: A AUTOMAÇÃO REALMENTE PAROU?
@@ -2659,3 +2646,433 @@ def verificar_campos_obrigatorios(driver):
         return erros or []
     except Exception:
         return []
+
+
+# ============================================================
+# EXPORTAR PEDIDOS ENVIADOS (pra alimentar o Dashboard Financeiro)
+# ============================================================
+
+def exportar_pedidos_shipped_upseller(driver, pasta_download):
+    """Automatiza a exportação de TODOS os pedidos de 'Pedidos > Enviado' do
+    Upseller pra Excel: Exportar > Exportar Todos os Pedidos > mantém os 3
+    checkboxes (Informação do Produto/Pedido, SKU Armazém) marcados > Exportar >
+    captura o número máximo de página > insere no campo de páginas > Exportar >
+    espera processar > Baixar.
+
+    Funciona com QUALQUER driver, mesmo um já aberto/logado antes (reaproveitado
+    da sessão global do Upseller) — configura o comportamento de download via CDP
+    aqui dentro, em vez de depender de ter sido criado com criar_driver(pasta_download=...)
+    (que só configura no momento da criação, e o driver desse app geralmente já
+    existe de um login anterior).
+
+    Retorna (sucesso: bool, caminho_do_arquivo_ou_mensagem_de_erro: str).
+    """
+    from selenium.webdriver.common.by import By
+    import glob
+
+    try:
+        os.makedirs(pasta_download, exist_ok=True)
+        try:
+            driver.execute_cdp_cmd("Page.setDownloadBehavior", {
+                "behavior": "allow",
+                "downloadPath": os.path.abspath(pasta_download),
+            })
+        except Exception:
+            pass
+
+        driver.get("https://app.upseller.com/pt/order/shipped")
+        time.sleep(3)
+        fechar_popup(driver)
+
+        # A URL direta às vezes cai numa tela geral de "Processando Pedidos" (com
+        # abas Para Reservar/Emitir/Enviar/Imprimir/Retirada/Enviado/Outras/Anulado)
+        # em vez de já abrir a lista filtrada de Enviados de verdade — clica na aba
+        # "Enviado" pra garantir que caiu na tela certa (idempotente: se já estiver
+        # nela, só recarrega a mesma lista).
+        clicou_aba_enviado = driver.execute_script("""
+            var candidatos = document.querySelectorAll('a, li, span, div');
+            for (var el of candidatos) {
+                if (el.children.length > 0) continue;
+                if (el.textContent.trim() === 'Enviado' && el.offsetParent !== null) {
+                    el.click();
+                    return true;
+                }
+            }
+            return false;
+        """)
+        if clicou_aba_enviado:
+            time.sleep(2)
+
+        # 0. Troca o filtro de data de "Hora de Envio" pra "Hora do Pagamento" e
+        # seleciona sempre do 1º dia do mês ANTERIOR até o último dia do mês ATUAL —
+        # cobre venda com pagamento confirmado atrasado, mesmo de pedido mais antigo.
+        # Datas calculadas aqui (não é input manual, roda sozinho toda vez).
+        import datetime as _dt
+        import calendar as _cal
+        hoje = _dt.date.today()
+        primeiro_mes_atual = hoje.replace(day=1)
+        ultimo_mes_atual = hoje.replace(day=_cal.monthrange(hoje.year, hoje.month)[1])
+        mes_anterior_fim = primeiro_mes_atual - _dt.timedelta(days=1)
+        primeiro_mes_anterior = mes_anterior_fim.replace(day=1)
+        data_inicio, data_fim = primeiro_mes_anterior, ultimo_mes_atual
+
+        # Abre o dropdown que hoje mostra "Hora de Envio"
+        driver.execute_script("""
+            var els = document.querySelectorAll('.ant-select-selection-selected-value');
+            for (var el of els) {
+                if (el.textContent.trim() === 'Hora de Envio' && el.offsetParent !== null) {
+                    el.click();
+                    return true;
+                }
+            }
+            return false;
+        """)
+        time.sleep(1)
+
+        # Clica "Hora do Pagamento" na lista que abriu
+        driver.execute_script("""
+            var itens = document.querySelectorAll('li, div, span');
+            for (var el of itens) {
+                if (el.textContent.trim() === 'Hora do Pagamento' && el.offsetParent !== null) {
+                    el.click();
+                    return true;
+                }
+            }
+            return false;
+        """)
+        time.sleep(1)
+
+        # Abre o calendário de intervalo de datas
+        driver.execute_script("""
+            var input = document.querySelector('input.ant-calendar-range-picker-input');
+            if (input) { input.click(); return true; }
+            return false;
+        """)
+        time.sleep(1)
+
+        def _clicar_dia_sem_navegar(dia_numero, indice_painel):
+            """indice_painel: 0 = calendário da esquerda (mês anterior), 1 = da
+            direita (mês atual) — os dois meses certos já aparecem por padrão nessa
+            tela (mês atual + anterior), então NUNCA navega/troca de mês, só clica
+            direto pelo número do dia dentro do painel certo. Ignora células cinzas
+            de overflow do mês vizinho (ex: dia 31 aparecendo no início do painel
+            do mês seguinte)."""
+            return driver.execute_script("""
+                var alvoTexto = String(arguments[0]);
+                var indicePainel = arguments[1];
+                var paineis = document.querySelectorAll('table.ant-calendar-table');
+                if (paineis.length <= indicePainel) return false;
+                var painel = paineis[indicePainel];
+                var celulas = painel.querySelectorAll('td');
+                for (var i = 0; i < celulas.length; i++) {
+                    var td = celulas[i];
+                    var classe = td.className || '';
+                    if (classe.indexOf('last-month') !== -1 || classe.indexOf('next-month') !== -1 ||
+                        classe.indexOf('disabled') !== -1) continue;
+                    var texto = td.textContent.trim();
+                    if (texto === alvoTexto && td.offsetParent !== null) {
+                        td.click();
+                        return true;
+                    }
+                }
+                return false;
+            """, dia_numero, indice_painel)
+
+        _clicar_dia_sem_navegar(data_inicio.day, 0)
+        time.sleep(0.3)
+        _clicar_dia_sem_navegar(data_fim.day, 1)
+        time.sleep(0.3)
+
+        # Confirma o intervalo escolhido — é um <a class="ant-calendar-ok-btn">, não
+        # um <button> comum.
+        driver.execute_script("""
+            var els = document.querySelectorAll('.ant-calendar-ok-btn, a[role="button"]');
+            for (var el of els) {
+                if (el.textContent.trim() === 'Ok' && el.offsetParent !== null) {
+                    el.click();
+                    return true;
+                }
+            }
+            return false;
+        """)
+
+        # Trocar o filtro de data dispara um recarregamento da lista de pedidos —
+        # se a gente clicar em "Exportar" enquanto isso ainda está rodando, o
+        # clique pode cair num overlay de loading (.ant-spin) ou num botão que
+        # está sendo re-renderizado, e o dropdown simplesmente não abre (sem
+        # erro nenhum). Espera o spinner sumir, com um piso de 3s de qualquer forma.
+        time.sleep(3)
+        for _ in range(10):
+            spinner_ativo = driver.execute_script("""
+                var els = document.querySelectorAll('.ant-spin-spinning');
+                for (var el of els) { if (el.offsetParent !== null) return true; }
+                return false;
+            """)
+            if not spinner_ativo:
+                break
+            time.sleep(0.5)
+
+        # 1. Clica "Exportar" (dropdown) — confirma que o menu REALMENTE abriu antes
+        # de seguir (poll), porque um clique pode "funcionar" no DOM e o menu ainda
+        # assim não aparecer (ou fechar sozinho de novo). Se não abrir, tenta
+        # clicar uma segunda vez (pode ter sido um toggle que fechou por acaso).
+        def _menu_exportar_aberto():
+            # Substring "exportar" (não frase exata) — tolera o texto do menu ter
+            # mudado (ex: só "Exportar todos", sem "os pedidos"). MAS precisa
+            # ignorar o texto de dentro do próprio botão-gatilho (closest('button'))
+            # e não aceitar a palavra sozinha ("exportar") — senão bate com o
+            # <span>Exportar</span> interno do botão, que está sempre visível
+            # mesmo com o menu fechado, e dá falso positivo.
+            return driver.execute_script("""
+                var candidatos = document.querySelectorAll('a, li, span, div');
+                for (var el of candidatos) {
+                    if (el.children.length > 0) continue;
+                    if (el.closest('button')) continue;
+                    var txt = el.textContent.replace(/\\s+/g, ' ').trim().toLowerCase();
+                    if (txt.indexOf('exportar') !== -1 && txt !== 'exportar' && txt.length < 60 && el.offsetParent !== null) {
+                        return true;
+                    }
+                }
+                return false;
+            """)
+
+        def _clicar_botao_exportar(tentar_js_tambem=False):
+            """Clique REAL do Selenium (mover o mouse + clicar), não .click() via JS —
+            o gatilho do dropdown (classe ant-dropdown-trigger) fica no <div> pai do
+            botão, e o listener do Vue pode depender de eventos de mouse de verdade
+            (mousedown/mouseup) em vez de só um evento de clique sintético. Em
+            retentativas (tentar_js_tambem=True) também dispara um .click() JS no
+            botão e no <div> pai logo em seguida — cobre o caso do clique real ter
+            sido "engolido" por um overlay/re-render que já sumiu quando o JS roda."""
+            from selenium.webdriver.common.action_chains import ActionChains
+            try:
+                elemento = None
+                for b in driver.find_elements(By.TAG_NAME, "button"):
+                    if b.text.strip() == "Exportar" and b.is_displayed():
+                        elemento = b
+                        break
+                if not elemento:
+                    return False
+                driver.execute_script("arguments[0].scrollIntoView({block:'center'});", elemento)
+                time.sleep(0.3)
+                ActionChains(driver).move_to_element(elemento).pause(0.2).click().perform()
+                if tentar_js_tambem:
+                    time.sleep(0.4)
+                    driver.execute_script("""
+                        var el = arguments[0];
+                        el.click();
+                        var pai = el.closest('.ant-dropdown-trigger') || el.parentElement;
+                        if (pai) { pai.click(); }
+                    """, elemento)
+                return True
+            except Exception:
+                return False
+
+        if not _clicar_botao_exportar():
+            return False, "❌ Botão 'Exportar' não encontrado na tela de Pedidos Enviados"
+
+        menu_aberto = False
+        for _tentativa in range(6):
+            time.sleep(0.6)
+            if _menu_exportar_aberto():
+                menu_aberto = True
+                break
+
+        if not menu_aberto:
+            _clicar_botao_exportar(tentar_js_tambem=True)
+            for _tentativa in range(6):
+                time.sleep(0.6)
+                if _menu_exportar_aberto():
+                    menu_aberto = True
+                    break
+
+        if not menu_aberto:
+            # Diagnóstico rico: já sabíamos que o botão "Exportar" continua visível
+            # mesmo quando o clique não abre nada — então o que falta ver é O QUE
+            # existe no DOM perto/dentro dele (pode ter virado outro tipo de
+            # componente, ex: não é mais um dropdown de verdade, ou tem mais de um
+            # botão "Exportar" na tela e a gente clica no errado).
+            diagnostico = driver.execute_script("""
+                var out = {};
+                var btns = [];
+                document.querySelectorAll('button').forEach(function(b) {
+                    if (b.textContent.trim() === 'Exportar') {
+                        btns.push({
+                            visivel: b.offsetParent !== null,
+                            html: b.outerHTML.slice(0, 300),
+                            pai_classe: b.parentElement ? b.parentElement.className : null,
+                            aria_expanded: b.getAttribute('aria-expanded'),
+                        });
+                    }
+                });
+                out.botoes_exportar = btns;
+
+                var dropdowns = [];
+                document.querySelectorAll('[class*="dropdown"], [class*="menu"], [class*="popup"], [role="menu"]').forEach(function(el) {
+                    var txt = el.textContent.trim();
+                    if (txt.length < 200) {
+                        dropdowns.push({classe: el.className, visivel: el.offsetParent !== null, texto: txt.slice(0, 120)});
+                    }
+                });
+                out.elementos_dropdown_like = dropdowns.slice(0, 15);
+
+                var textos = [];
+                document.querySelectorAll('a, li, span, div, button').forEach(function(el) {
+                    var txt = el.textContent.trim();
+                    if (txt && txt.length < 40 && el.offsetParent !== null) textos.push(txt);
+                });
+                out.textos_visiveis = [...new Set(textos)].slice(0, 40);
+
+                return out;
+            """)
+            return False, f"❌ Menu 'Exportar' não abriu. Diagnóstico: {diagnostico}"
+
+        # 2. Clica "Exportar Todos os Pedidos" — tenta a frase completa primeiro,
+        # cai pra "exportar todos" (sem "os pedidos") se o texto do menu mudou.
+        clicou_todos = driver.execute_script("""
+            var candidatos = document.querySelectorAll('a, li, span, div');
+            var fallback = null;
+            for (var el of candidatos) {
+                if (el.children.length > 0) continue;
+                if (el.offsetParent === null) continue;
+                var txt = el.textContent.replace(/\\s+/g, ' ').trim().toLowerCase();
+                if (txt.indexOf('exportar todos os pedidos') !== -1) {
+                    el.click();
+                    return true;
+                }
+                if (!fallback && txt.indexOf('exportar todos') !== -1) fallback = el;
+            }
+            if (fallback) { fallback.click(); return true; }
+            return false;
+        """)
+        if not clicou_todos:
+            diagnostico2 = driver.execute_script("""
+                var textos = [];
+                document.querySelectorAll('a, li, span, div').forEach(function(el) {
+                    if (el.children.length > 0) return;
+                    var txt = el.textContent.trim();
+                    if (txt && txt.toLowerCase().indexOf('exportar') !== -1) {
+                        textos.push({texto: txt, visivel: el.offsetParent !== null});
+                    }
+                });
+                return textos;
+            """)
+            return False, f"❌ 'Exportar Todos os Pedidos' não encontrado (mas o menu tinha aberto). Itens com 'exportar' no menu: {diagnostico2}"
+        time.sleep(2)
+
+        # 3. Modal "Informações de Configuração" — garante que os 3 checkboxes
+        # (Informação do Produto, Informação do Pedido, SKU (Armazém)) ficam
+        # marcados, sem mexer nos outros que não fazem parte disso.
+        driver.execute_script("""
+            var alvos = ['informação do produto', 'informação do pedido', 'sku (armazém)', 'sku (armazem)'];
+            var candidatos = document.querySelectorAll('label');
+            for (var label of candidatos) {
+                var txt = (label.textContent || '').trim().toLowerCase();
+                if (alvos.indexOf(txt) !== -1) {
+                    var input = label.querySelector('input[type="checkbox"]');
+                    if (input && !input.checked) { input.click(); }
+                }
+            }
+        """)
+        time.sleep(0.5)
+
+        # 4. Clica "Exportar" do modal
+        clicou_exportar_modal = driver.execute_script("""
+            var btns = document.querySelectorAll('button.ant-btn-primary');
+            for (var b of btns) {
+                if (b.textContent.trim() === 'Exportar' && b.offsetParent !== null) {
+                    b.click();
+                    return true;
+                }
+            }
+            return false;
+        """)
+        if not clicou_exportar_modal:
+            return False, "❌ Botão 'Exportar' do modal de configuração não encontrado"
+        time.sleep(2)
+
+        # 5. Captura o "Total de Páginas" (ex: <div class="fw_bold">17</div>) e insere
+        # no SEGUNDO campo de página (o modal tem dois: "de" página 1 até página N —
+        # o primeiro já vem certo como 1, só o segundo precisa virar o total).
+        pagina_max = driver.execute_script("""
+            var els = document.querySelectorAll('.fw_bold');
+            for (var el of els) {
+                var txt = el.textContent.trim();
+                if (/^\\d+$/.test(txt)) return txt;
+            }
+            return null;
+        """)
+        if pagina_max:
+            driver.execute_script("""
+                var inputs = document.querySelectorAll('input.ant-input-number-input[role="spinbutton"]');
+                if (inputs.length > 1) {
+                    var input = inputs[1];
+                    var setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+                    setter.call(input, arguments[0]);
+                    input.dispatchEvent(new Event('input', {bubbles: true}));
+                    input.dispatchEvent(new Event('change', {bubbles: true}));
+                    input.blur();
+                }
+            """, pagina_max)
+            time.sleep(0.5)
+
+        # 6. Clica "Exportar" (final, gera o arquivo pra baixar)
+        clicou_exportar_final = driver.execute_script("""
+            var btns = document.querySelectorAll('button.ant-btn-primary');
+            for (var b of btns) {
+                if (b.textContent.trim() === 'Exportar' && b.offsetParent !== null) {
+                    b.click();
+                    return true;
+                }
+            }
+            return false;
+        """)
+        if not clicou_exportar_final:
+            return False, "❌ Botão 'Exportar' final não encontrado"
+
+        # 7. Espera a Upseller processar a exportação antes de procurar "Baixar" —
+        # com muitos pedidos (~11 páginas) isso não é instantâneo.
+        time.sleep(8)
+
+        # Captura o estado da pasta ANTES de clicar em "Baixar" — se isso rodasse
+        # depois do clique (como estava antes), um download rápido já apareceria na
+        # pasta antes da gente sequer começar a olhar, e nunca seria contado como
+        # "arquivo novo".
+        arquivos_antes = set(glob.glob(os.path.join(pasta_download, "*")))
+
+        clicou_baixar = False
+        for _tentativa in range(10):
+            clicou_baixar = driver.execute_script("""
+                var btns = document.querySelectorAll('button.ant-btn-primary');
+                for (var b of btns) {
+                    if (b.textContent.trim() === 'Baixar' && b.offsetParent !== null) {
+                        b.click();
+                        return true;
+                    }
+                }
+                return false;
+            """)
+            if clicou_baixar:
+                break
+            time.sleep(3)
+
+        if not clicou_baixar:
+            return False, "❌ Botão 'Baixar' não encontrado — a exportação pode ainda estar processando, tente de novo em instantes"
+
+        # 8. Espera o arquivo aparecer na pasta de download configurada no driver.
+        arquivo_novo = None
+        for _tentativa in range(30):
+            time.sleep(1)
+            arquivos_depois = set(glob.glob(os.path.join(pasta_download, "*")))
+            novos = [f for f in (arquivos_depois - arquivos_antes) if not f.endswith(".crdownload")]
+            if novos:
+                arquivo_novo = max(novos, key=os.path.getmtime)
+                break
+
+        if not arquivo_novo:
+            return False, f"❌ Arquivo não apareceu em {pasta_download} a tempo (clicou Baixar, mas o download não foi detectado)"
+
+        return True, arquivo_novo
+
+    except Exception as e:
+        return False, f"❌ Erro ao exportar pedidos: {str(e)[:200]}"

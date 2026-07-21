@@ -80,6 +80,7 @@ TABLE_PIPELINE     = "leandro-marketplace.DL_Store_Online.tb_pipeline_publicacao
 TABLE_SKU_REGISTRO = "leandro-marketplace.DL_Store_Online.tb_sku_registrados"
 TABLE_HISTORICO    = "leandro-marketplace.DL_Store_Online.tb_historico_produtos_campineira"
 TABLE_HISTORICO_STAGE = "leandro-marketplace.DL_Store_Online.tb_stage_historico_campineira"
+TABLE_EXCLUIDOS    = "leandro-marketplace.DL_Store_Online.tb_campineira_excluidos"
 
 # ============================================================
 # FUNÇÕES AUXILIARES
@@ -95,17 +96,65 @@ def ler_status() -> dict:
     with open(ARQUIVO_STATUS, encoding="utf-8") as f:
         return json.load(f)
 
-def ler_resultados() -> list:
+def ler_resultados(client=None) -> list:
+    """Lê o resultado da varredura mais recente. Prioriza o BigQuery
+    (tb_resultado_produtos_campineira) — essa tabela já recebe cada produto em
+    tempo real, um por um, durante a varredura (ver registrar_produto_bq), então
+    sobrevive mesmo se a varredura travar/cair no meio: ao reabrir a tela, o que
+    já foi capturado até o momento da queda continua lá. Cai pro arquivo JSON
+    local só se o BigQuery estiver indisponível (fallback, não fonte principal)."""
+    if client is not None:
+        try:
+            q = f"""
+                SELECT * FROM `{TABLE_CAMPINEIRA}`
+                WHERE id_captura = (SELECT MAX(id_captura) FROM `{TABLE_CAMPINEIRA}`)
+            """
+            df = client.query(q).to_dataframe()
+            if not df.empty:
+                produtos = []
+                for _, row in df.iterrows():
+                    produtos.append({
+                        "id": row.get("id_produto"),
+                        "nome": row.get("nome"),
+                        "categoria": row.get("categoria"),
+                        "estoque": row.get("estoque"),
+                        "preco": row.get("custo_campineira"),
+                        "ean": row.get("ean"),
+                        "fabricante": row.get("fabricante"),
+                        "caixa_com": row.get("caixa_com"),
+                        "quantidade": row.get("quantidade"),
+                        "cores": row.get("cor_cores"),
+                        "composicao": row.get("composicao"),
+                        "validade": row.get("validade"),
+                        "tamanho": row.get("tamanho"),
+                        "peso": row.get("peso"),
+                        "tipo": row.get("tipo"),
+                        "caixa_master": row.get("caixa_master"),
+                        "link": row.get("link"),
+                        "imagem": row.get("imagem"),
+                    })
+                return produtos
+        except Exception:
+            pass
     if not os.path.exists(ARQUIVO_RESULTADOS):
         return []
     with open(ARQUIVO_RESULTADOS, encoding="utf-8") as f:
         return json.load(f)
 
-def carregar_excluidos() -> set:
-    """Carrega os produtos removidos manualmente da fila de publicação. Fica num
-    arquivo local (não só em st.session_state) porque session_state é perdido a
-    cada reinício do Streamlit — sem persistir em arquivo, um item removido
-    "voltava sozinho" depois de qualquer restart."""
+def carregar_excluidos(client=None) -> set:
+    """Carrega os produtos removidos manualmente da fila de publicação. Prioriza
+    BigQuery (tb_campineira_excluidos) — session_state E arquivo local são
+    perdidos a cada reinício do container no Streamlit Cloud, o que fazia um
+    item removido "voltar sozinho" depois de qualquer restart/redeploy. Arquivo
+    local só entra como fallback se o BigQuery estiver indisponível."""
+    if client is not None:
+        try:
+            df = client.query(
+                f"SELECT DISTINCT id_produto FROM `{TABLE_EXCLUIDOS}`"
+            ).to_dataframe()
+            return set(df["id_produto"].astype(str))
+        except Exception:
+            pass
     if not os.path.exists(ARQUIVO_EXCLUIDOS):
         return set()
     try:
@@ -114,7 +163,17 @@ def carregar_excluidos() -> set:
     except Exception:
         return set()
 
-def salvar_excluidos(excluidos: set):
+def salvar_excluidos(excluidos: set, client=None):
+    if client is not None:
+        try:
+            import pandas as pd
+            linhas = [{"id_produto": str(x), "data_exclusao": datetime.utcnow().isoformat()} for x in excluidos]
+            df = pd.DataFrame(linhas, columns=["id_produto", "data_exclusao"])
+            job_config = bigquery.LoadJobConfig(write_disposition="WRITE_TRUNCATE")
+            client.load_table_from_dataframe(df, TABLE_EXCLUIDOS, job_config=job_config).result()
+            return
+        except Exception:
+            pass
     try:
         with open(ARQUIVO_EXCLUIDOS, "w", encoding="utf-8") as f:
             json.dump(list(excluidos), f, ensure_ascii=False)
@@ -320,9 +379,12 @@ def registrar_produto_em_tb_produtos(client, sku, nome, custo):
     except Exception as e:
         return False, str(e)[:300]
 
-def registrar_produto_bq(client, id_captura, categoria, produto):
+def registrar_produto_bq(client, id_captura, categoria, produto, pagina=None):
     """Grava o produto capturado na tb_resultado_produtos_campineira assim que é extraído,
-    para não perder o resultado se o cache/disco local for limpo.
+    para não perder o resultado se o cache/disco local for limpo. Guarda também o número
+    da página onde o produto foi encontrado — é isso que permite retomar uma varredura
+    interrompida exatamente de onde parou (ver buscar_progresso_varredura e o parâmetro
+    retomar_id_captura de rodar_rpa_background), sem precisar de tabela nova.
     Retorna (sucesso: bool, erro: str|None)."""
     if not client:
         return False, "client BigQuery não conectado (conectar_bigquery() retornou None)"
@@ -340,6 +402,7 @@ def registrar_produto_bq(client, id_captura, categoria, produto):
             "data_captura": datetime.utcnow().isoformat(),
             "id_produto": produto.get("id"),
             "categoria": categoria,
+            "pagina": pagina,
             "nome": produto.get("nome"),
             "estoque": produto.get("estoque"),
             "custo_campineira": preco_str,
@@ -434,56 +497,6 @@ def carregar_pipeline_bq(client):
         return resultado
     except Exception:
         return {}
-
-def listar_produtos_imagem_pendente(client, apenas_com_erro=False):
-    """Lista produtos já publicados no Armazém pra permitir reprocessar a imagem.
-    Por padrão lista TODOS os publicados — um upload pode "dar certo" (sem erro
-    registrado) mas subir a imagem errada (ex: um selo/badge do site de origem em
-    vez da foto real), então não dá pra confiar só em quem teve erro registrado.
-    Se apenas_com_erro=True, filtra só quem teve aviso de imagem na mensagem.
-    Retorna dicts com sku_upseller, id_produto, nome, mensagem e a URL da imagem
-    (buscada na captura mais recente da Campineira)."""
-    if not client:
-        return []
-    try:
-        filtro_erro = "AND mensagem LIKE '%Imagem:%'" if apenas_com_erro else ""
-        q1 = f"""
-            SELECT sku_upseller, id_produto, nome, mensagem
-            FROM `{TABLE_PIPELINE}`
-            WHERE etapa = 'armazem' AND status = 'ok' {filtro_erro}
-            QUALIFY ROW_NUMBER() OVER (PARTITION BY sku_upseller ORDER BY data_evento DESC) = 1
-        """
-        df1 = client.query(q1).to_dataframe()
-        if df1.empty:
-            return []
-
-        resultado = []
-        for _, r in df1.iterrows():
-            imagem = None
-            try:
-                q2 = f"""
-                    SELECT imagem FROM `{TABLE_CAMPINEIRA}`
-                    WHERE id_produto = @id_produto
-                    ORDER BY data_captura DESC LIMIT 1
-                """
-                job_config = bigquery.QueryJobConfig(
-                    query_parameters=[bigquery.ScalarQueryParameter("id_produto", "STRING", r["id_produto"])]
-                )
-                df2 = client.query(q2, job_config=job_config).to_dataframe()
-                if not df2.empty:
-                    imagem = df2.iloc[0]["imagem"]
-            except Exception:
-                pass
-            resultado.append({
-                "sku_upseller": r["sku_upseller"],
-                "id_produto": r["id_produto"],
-                "nome": r["nome"],
-                "mensagem": r["mensagem"],
-                "imagem": imagem,
-            })
-        return resultado
-    except Exception:
-        return []
 
 def listar_produtos_armazem_com_erro(client):
     """Lista produtos cuja ÚLTIMA tentativa de publicar no Armazém (Etapa 1) falhou
@@ -587,12 +600,53 @@ def filtrar_resultados(dados, filtros_cat):
     )
     return resultado
 
+def buscar_progresso_varredura(client):
+    """Olha a captura mais recente em tb_resultado_produtos_campineira e monta um
+    resumo de por onde ela parou — categoria por categoria, qual foi a última
+    página capturada. Sobrevive a reinício do app (não depende de arquivo local
+    nem de session_state, só do que já está gravado no BigQuery), então dá pra
+    retomar uma varredura mesmo depois do Streamlit reiniciar do zero. Retorna
+    None se não achar nenhuma captura, ou um dict:
+    {"id_captura": ..., "ultima_atividade": ..., "categorias": {nome: pagina_max}, "total_produtos": N}"""
+    if not client:
+        return None
+    try:
+        q = f"""
+            SELECT categoria, MAX(pagina) AS pagina_max, COUNT(*) AS produtos, MAX(data_captura) AS ultima_atividade
+            FROM `{TABLE_CAMPINEIRA}`
+            WHERE id_captura = (SELECT MAX(id_captura) FROM `{TABLE_CAMPINEIRA}`)
+            GROUP BY categoria
+        """
+        df = client.query(q).to_dataframe()
+        if df.empty:
+            return None
+        id_captura_df = client.query(f"SELECT MAX(id_captura) AS ult FROM `{TABLE_CAMPINEIRA}`").to_dataframe()
+        id_captura = id_captura_df["ult"].iloc[0]
+        categorias = {row["categoria"]: int(row["pagina_max"] or 1) for _, row in df.iterrows()}
+        return {
+            "id_captura": id_captura,
+            "ultima_atividade": df["ultima_atividade"].max(),
+            "categorias": categorias,
+            "total_produtos": int(df["produtos"].sum()),
+        }
+    except Exception:
+        return None
+
 # ============================================================
 # RPA EM BACKGROUND
 # ============================================================
 
-def rodar_rpa_background(filtros_cat, cats_varrer=None, buscar_detalhes=False):
-    """Roda o RPA em thread separada para não travar o Streamlit"""
+def rodar_rpa_background(filtros_cat, cats_varrer=None, buscar_detalhes=False,
+                          retomar_id_captura=None, paginas_ja_feitas=None):
+    """Roda o RPA em thread separada para não travar o Streamlit.
+
+    retomar_id_captura / paginas_ja_feitas: usados só quando o usuário clica em
+    "Retomar" uma varredura interrompida (ver buscar_progresso_varredura). Em vez
+    de começar um id_captura novo do zero, reaproveita o antigo (os produtos já
+    capturados continuam contando pra essa mesma varredura) e, categoria por
+    categoria, avança direto até a página onde parou (paginas_ja_feitas é um
+    dict {categoria: última página já capturada}) antes de voltar a extrair/
+    registrar produtos normalmente."""
     try:
         from selenium import webdriver
         from selenium.webdriver.common.by import By
@@ -602,7 +656,8 @@ def rodar_rpa_background(filtros_cat, cats_varrer=None, buscar_detalhes=False):
         import time
 
         inicio_dt = datetime.now()
-        id_captura = inicio_dt.strftime("%Y%m%d_%H%M%S")
+        id_captura = retomar_id_captura or inicio_dt.strftime("%Y%m%d_%H%M%S")
+        paginas_ja_feitas = paginas_ja_feitas or {}
         bq_conn_erro = None
         try:
             client_bq_camp = conectar_bigquery_rpa()
@@ -694,6 +749,26 @@ def rodar_rpa_background(filtros_cat, cats_varrer=None, buscar_detalhes=False):
                     categorias.append(c)
 
             todos_produtos = []
+            # Junta produtos aqui até completar 5 páginas, aí grava no histórico
+            # PERMANENTE (tb_historico_produtos_campineira) e esvazia — assim, se a
+            # varredura cair no meio de uma categoria grande, o que já foi lido até
+            # ali (menos as últimas <5 páginas) já está salvo de verdade, não só na
+            # memória da thread. O resultado por produto individual já ia direto pro
+            # BigQuery de qualquer forma (registrar_produto_bq, tela Resultados lê de
+            # lá) — esse buffer aqui é só pro histórico consolidado.
+            buffer_checkpoint = []
+            paginas_desde_ultimo_checkpoint = 0
+            PAGINAS_POR_CHECKPOINT = 5
+
+            def _gravar_checkpoint_historico():
+                nonlocal buffer_checkpoint, paginas_desde_ultimo_checkpoint
+                if not buffer_checkpoint:
+                    return
+                ok_hist, erro_hist = atualizar_historico_bq(client_bq_camp, buffer_checkpoint)
+                if not ok_hist:
+                    atualizar(f"⚠️ Falha ao gravar checkpoint no histórico: {erro_hist}")
+                buffer_checkpoint = []
+                paginas_desde_ultimo_checkpoint = 0
 
             SCRIPT_EXTRAI = """
             var boxes = document.querySelectorAll('div.box-produtos');
@@ -765,8 +840,47 @@ def rodar_rpa_background(filtros_cat, cats_varrer=None, buscar_detalhes=False):
                     pagina = 1
                     url_anterior = ""
 
+                    # Retomando uma varredura interrompida? Avança direto até a
+                    # página onde parou (clicando ">" sem extrair nada) antes de
+                    # voltar ao fluxo normal — evita registrar de novo o que essa
+                    # categoria já tinha capturado antes da queda.
+                    pagina_alvo = paginas_ja_feitas.get(nome_cat)
+                    if pagina_alvo:
+                        categoria_ja_completa = False
+                        atualizar(f"[{idx+1}/{len(categorias)}] {nome_cat} — retomando, avançando até a pág. {pagina_alvo + 1}...")
+                        while pagina < pagina_alvo + 1:
+                            pag_links_ff = driver.find_elements(By.CSS_SELECTOR, "ul.pagination a")
+                            prox_ff = None
+                            for link in pag_links_ff:
+                                if link.text.strip() == ">":
+                                    pai_ff = link.find_element(By.XPATH, "..")
+                                    if "disabled" not in (pai_ff.get_attribute("class") or ""):
+                                        prox_ff = link
+                                        break
+                            if not prox_ff:
+                                # Não tem mais próxima página — essa categoria já
+                                # tinha sido totalmente varrida antes da queda.
+                                categoria_ja_completa = True
+                                break
+                            url_antes_ff = driver.current_url
+                            driver.execute_script("arguments[0].click();", prox_ff)
+                            time.sleep(3)
+                            if driver.current_url == url_antes_ff:
+                                categoria_ja_completa = True
+                                break
+                            pagina += 1
+                        if categoria_ja_completa:
+                            continue
+
                     while True:
-                        produtos = driver.execute_script(SCRIPT_EXTRAI)
+                        # Retry único em falha transitória de JS/DOM (a causa mais
+                        # comum de perder uma categoria inteira no meio de uma
+                        # varredura grande) — só desiste mesmo se falhar 2x seguidas.
+                        try:
+                            produtos = driver.execute_script(SCRIPT_EXTRAI)
+                        except Exception:
+                            time.sleep(2)
+                            produtos = driver.execute_script(SCRIPT_EXTRAI)
                         for p in produtos:
                             # Busca detalhes completos (opcional)
                             detalhes = {"fabricante": None, "caixa_com": None, "ean": None,
@@ -823,7 +937,16 @@ def rodar_rpa_background(filtros_cat, cats_varrer=None, buscar_detalhes=False):
                                     driver.close()
                                     driver.switch_to.window(driver.window_handles[0])
                                 except:
+                                    # Se algo quebrou ENTRE abrir a aba nova e o driver.close()
+                                    # de cima, essa aba fica órfã aberta — sozinha isso é
+                                    # pouca coisa, mas em milhares de produtos numa categoria
+                                    # grande vira um vazamento real de memória do Chrome
+                                    # (cada aba é um processo renderer). Fecha qualquer aba
+                                    # extra antes de voltar pra principal.
                                     try:
+                                        while len(driver.window_handles) > 1:
+                                            driver.switch_to.window(driver.window_handles[-1])
+                                            driver.close()
                                         driver.switch_to.window(driver.window_handles[0])
                                     except:
                                         pass
@@ -841,10 +964,20 @@ def rodar_rpa_background(filtros_cat, cats_varrer=None, buscar_detalhes=False):
                                 continue
 
                             todos_produtos.append(produto_final)
-                            ok_bq, erro_bq = registrar_produto_bq(client_bq_camp, id_captura, nome_cat, produto_final)
+                            buffer_checkpoint.append(produto_final)
+                            ok_bq, erro_bq = registrar_produto_bq(client_bq_camp, id_captura, nome_cat, produto_final, pagina=pagina)
                             if not ok_bq and not bq_erro_reportado[0]:
                                 bq_erro_reportado[0] = True
                                 atualizar(f"⚠️ Falha ao gravar no BigQuery: {erro_bq}")
+
+                        paginas_desde_ultimo_checkpoint += 1
+                        if paginas_desde_ultimo_checkpoint >= PAGINAS_POR_CHECKPOINT:
+                            atualizar(f"[{idx+1}/{len(categorias)}] {nome_cat} — pág. {pagina} "
+                                      f"(checkpoint: gravando {len(buffer_checkpoint)} produtos no histórico)...")
+                            _gravar_checkpoint_historico()
+                        else:
+                            atualizar(f"[{idx+1}/{len(categorias)}] {nome_cat} — pág. {pagina} "
+                                      f"({len(todos_produtos)} produtos até agora)")
 
                         # Próxima página
                         pag_links = driver.find_elements(By.CSS_SELECTOR, "ul.pagination a")
@@ -869,17 +1002,21 @@ def rodar_rpa_background(filtros_cat, cats_varrer=None, buscar_detalhes=False):
 
                 except Exception as e:
                     atualizar(f"[{idx+1}/{len(categorias)}] ERRO em {nome_cat}: {str(e)[:50]}")
+                    # Não perde o que já leu dessa categoria até o erro acontecer —
+                    # grava o buffer acumulado antes de seguir pra próxima categoria.
+                    _gravar_checkpoint_historico()
 
-            # SALVA RESULTADOS (só a foto da última varredura — "Resultados" continua assim)
+            # Sobra de produtos das últimas <5 páginas que ainda não bateu checkpoint.
+            _gravar_checkpoint_historico()
+
+            # SALVA RESULTADOS (fallback local — a aba Resultados já lê direto do
+            # BigQuery, tempo real; isso aqui só é usado se o BigQuery cair)
             with open(ARQUIVO_RESULTADOS, "w", encoding="utf-8") as f:
                 json.dump(todos_produtos, f, ensure_ascii=False)
 
-            # Alimenta o histórico PERMANENTE (nunca sobrescrito) — atualiza estoque/
-            # preço só de quem mudou, mantém o resto intocado, preserva SKU já publicado.
-            if todos_produtos:
-                ok_hist, erro_hist = atualizar_historico_bq(client_bq_camp, todos_produtos)
-                if not ok_hist:
-                    atualizar(f"⚠️ Falha ao atualizar histórico no BigQuery: {erro_hist}")
+            # Histórico PERMANENTE já foi alimentado incrementalmente pelos
+            # checkpoints a cada 5 páginas (_gravar_checkpoint_historico) — não
+            # precisa mandar tudo de novo aqui no final.
 
             fim_dt = datetime.now()
             st_atual = ler_status()
@@ -1028,7 +1165,6 @@ def _publicar_um_produto_armazem(p, client_bq_pipeline):
     sucesso/erro persistente) — chamada tanto pelo botão "🚀 Publicar" individual
     quanto pelo loop de "Publicar Selecionados" em massa. Retorna (sucesso, msg)."""
     from modulo_upseller import publicar_produto_upseller
-    import json, os
 
     # Valida o EAN ANTES de tentar publicar — evita mandar pro Upseller um
     # cadastro que já sabemos que vai ser recusado com "código de barra já
@@ -1041,19 +1177,16 @@ def _publicar_um_produto_armazem(p, client_bq_pipeline):
         return False, msg
 
     driver = st.session_state.get("ups_driver")
-    sucesso, msg = publicar_produto_upseller(driver, p)
+    # client_bq_pipeline vai pra get_proximo_sku() (dentro de
+    # publicar_produto_upseller) gerar o SKU a partir de tb_sku_registrados —
+    # fonte confiável, não some com restart do app como um arquivo local sumia.
+    sucesso, msg, sku_gerado = publicar_produto_upseller(driver, p, client_bq_pipeline)
     st.session_state[f"pub_{p.get('id')}"] = sucesso
     st.session_state[f"pub_msg_{p.get('id')}"] = msg
 
-    sku_gerado = None
     avisos_bq = []
     if sucesso:
-        f_sku = "upseller_sku_counter.json"
-        if os.path.exists(f_sku):
-            with open(f_sku) as f:
-                num = json.load(f).get("contador", 1)
-            sku_gerado = f"RJ-{num:05d}"
-            st.session_state[f"pub_sku_{p.get('id')}"] = sku_gerado
+        st.session_state[f"pub_sku_{p.get('id')}"] = sku_gerado
 
         # Registra o novo SKU (+ EAN) na base de controle — é o que
         # checar_ean_duplicado_bq() consulta nas próximas publicações.
@@ -1141,11 +1274,13 @@ def renderizar_card_publicacao(p, key_suffix, client_bq_pipeline):
                 def add_log(msg):
                     st.session_state[log_key].append(msg)
 
-                # Mostra log
+                # Mostra log — sempre aberto (expanded=True), então nem precisa de
+                # expander (que dependeria da fonte de ícone quebrada pra seta);
+                # mostra direto.
                 if st.session_state[log_key]:
-                    with st.expander("📋 Log", expanded=True):
-                        for linha in st.session_state[log_key][-8:]:
-                            st.caption(linha)
+                    st.markdown("**📋 Log**")
+                    for linha in st.session_state[log_key][-8:]:
+                        st.caption(linha)
 
                 st.markdown("**Publicar por plataforma:**")
 
@@ -1265,7 +1400,7 @@ def renderizar_card_publicacao(p, key_suffix, client_bq_pipeline):
                 excluidos_envio = st.session_state.get("pub_excluidos", set())
                 excluidos_envio.add(p.get('id'))
                 st.session_state["pub_excluidos"] = excluidos_envio
-                salvar_excluidos(excluidos_envio)
+                salvar_excluidos(excluidos_envio, client_bq_pipeline)
                 st.rerun()
 
 # ============================================================
@@ -1293,24 +1428,111 @@ def pagina_campineira(client_bq=None):
             st.error(f"⚠️ Não conectou ao BigQuery nesta página: {str(_erro_bq_conexao)[:300]}")
 
     status = ler_status()
-    resultados_brutos = ler_resultados()
+    resultados_brutos = ler_resultados(client_bq_pipeline)
 
     # ---- ABA DE CONFIGURAÇÃO ----
     if "pub_excluidos" not in st.session_state:
-        # Carrega do arquivo, não só um set() vazio — sem isso, um item removido
-        # "voltava sozinho" depois de qualquer reinício do Streamlit, porque
-        # st.session_state some mas o arquivo local continua.
-        st.session_state["pub_excluidos"] = carregar_excluidos()
+        # Carrega do BigQuery, não só um set() vazio — sem isso, um item removido
+        # "voltava sozinho" depois de qualquer reinício do Streamlit/container,
+        # porque st.session_state some.
+        st.session_state["pub_excluidos"] = carregar_excluidos(client_bq_pipeline)
 
-    tab1, tab2, tab3, tab4, tab_hist = st.tabs(
-        ["⚙️ Configurar e Rodar", "📦 Resultados", "🖼️ Galeria", "🚀 Publicar", "🗂️ Histórico"]
-    )
+    # st.tabs() nativo do Streamlit sempre volta pra primeira aba a cada rerun
+    # causado por QUALQUER clique dentro de uma aba diferente (comportamento do
+    # próprio componente — todo mundo que usa acaba esbarrando nisso). Botões +
+    # session_state resolvem: a aba ativa persiste entre reruns porque fica
+    # guardada no estado da sessão, não na renderização do widget. Bônus: só o
+    # conteúdo da aba ativa roda/renderiza (st.tabs() rodava as 5 sempre, mesmo
+    # as invisíveis) — telas mais rápidas, principalmente Publicar e Histórico.
+    ABAS_CAMPINEIRA = ["⚙️ Configurar e Rodar", "📦 Resultados", "🖼️ Galeria", "🚀 Publicar", "🗂️ Histórico"]
+    if "campineira_aba_ativa" not in st.session_state:
+        st.session_state["campineira_aba_ativa"] = ABAS_CAMPINEIRA[0]
+
+    # st.container(key=...) gera uma classe CSS estável (.st-key-<key>) — jeito
+    # oficialmente suportado (Streamlit 1.31+) de escopar CSS só nesse bloco,
+    # bem mais confiável que tentar adivinhar a estrutura do DOM com seletor de
+    # irmão (a primeira tentativa não pegou por causa disso).
+    st.markdown("""
+        <style>
+        .st-key-campineira_tabs_row div[data-testid="stHorizontalBlock"] {
+            gap: 0.3rem !important;
+        }
+        .st-key-campineira_tabs_row button {
+            border-radius: 6px 6px 0 0 !important;
+            border: none !important;
+            border-bottom: 2px solid transparent !important;
+            padding: 0.35rem 0.5rem !important;
+            font-size: 0.85rem !important;
+            font-weight: 500 !important;
+            box-shadow: none !important;
+            transition: background 0.15s ease, color 0.15s ease;
+        }
+        .st-key-campineira_tabs_row button[kind="secondary"] {
+            background: transparent !important;
+            color: #9ca3af !important;
+        }
+        .st-key-campineira_tabs_row button[kind="secondary"]:hover {
+            color: #e5e7eb !important;
+            background: rgba(255,255,255,0.05) !important;
+        }
+        .st-key-campineira_tabs_row button[kind="primary"] {
+            background: rgba(251,191,36,0.08) !important;
+            color: #fbbf24 !important;
+            border-bottom: 2px solid #fbbf24 !important;
+        }
+        </style>
+    """, unsafe_allow_html=True)
+
+    with st.container(key="campineira_tabs_row"):
+        cols_abas = st.columns(len(ABAS_CAMPINEIRA))
+        for col_aba, nome_aba in zip(cols_abas, ABAS_CAMPINEIRA):
+            with col_aba:
+                ativa = st.session_state["campineira_aba_ativa"] == nome_aba
+                if st.button(nome_aba, key=f"btn_aba_{nome_aba}",
+                             type="primary" if ativa else "secondary", use_container_width=True):
+                    st.session_state["campineira_aba_ativa"] = nome_aba
+                    st.rerun()
+    aba_ativa = st.session_state["campineira_aba_ativa"]
+    st.markdown('<div style="border-bottom: 1px solid rgba(255,255,255,0.1); margin-bottom: 1rem;"></div>', unsafe_allow_html=True)
 
     # ============================================================
-    # TAB 1 — CONFIGURAÇÃO
+    # ABA 1 — CONFIGURAÇÃO
     # ============================================================
-    with tab1:
+    if aba_ativa == "⚙️ Configurar e Rodar":
         st.markdown("### Configurar Varredura")
+
+        # Retomar varredura interrompida — olha só pro BigQuery (não depende de
+        # arquivo local nem session_state), então funciona mesmo se o app tiver
+        # reiniciado do zero depois da queda. Só mostra quando nada está rodando
+        # agora, pra não competir com uma varredura em andamento.
+        if not status.get("rodando"):
+            progresso_anterior = buscar_progresso_varredura(client_bq_pipeline)
+            if progresso_anterior:
+                with st.container(border=True):
+                    st.markdown("**📍 Última varredura encontrada**")
+                    cats_resumo = ", ".join(
+                        f"{nome} (pág. {pag})" for nome, pag in progresso_anterior["categorias"].items()
+                    )
+                    st.caption(
+                        f"{progresso_anterior['total_produtos']} produto(s) capturado(s) — {cats_resumo}. "
+                        f"Última atividade: {progresso_anterior['ultima_atividade']}"
+                    )
+                    if st.button("🔁 Retomar de onde parou", key="btn_retomar_varredura"):
+                        cats_resumo_lista = list(progresso_anterior["categorias"].keys())
+                        filtros_cat = {c: {"estoque_min": 70, "preco_min": 4.99} for c in cats_resumo_lista}
+                        t = threading.Thread(
+                            target=rodar_rpa_background,
+                            args=(filtros_cat, cats_resumo_lista, True),
+                            kwargs={
+                                "retomar_id_captura": progresso_anterior["id_captura"],
+                                "paginas_ja_feitas": progresso_anterior["categorias"],
+                            },
+                            daemon=True
+                        )
+                        t.start()
+                        st.success("Retomando varredura! Acompanhe na aba Resultados.")
+                        st.rerun()
+            st.markdown("---")
 
         # Inicializa fila no session_state
         if "campineira_fila" not in st.session_state:
@@ -1423,9 +1645,9 @@ def pagina_campineira(client_bq=None):
             st.info("Nenhuma categoria na fila. Selecione uma categoria e clique em ✅ OK.")
 
     # ============================================================
-    # TAB 2 — RESULTADOS EM TABELA
+    # ABA 2 — RESULTADOS EM TABELA
     # ============================================================
-    with tab2:
+    if aba_ativa == "📦 Resultados":
         st.markdown("### Produtos Validados")
 
         if not resultados_brutos:
@@ -1557,9 +1779,9 @@ def pagina_campineira(client_bq=None):
                              })
 
     # ============================================================
-    # TAB 3 — GALERIA COM IMAGENS
+    # ABA 3 — GALERIA COM IMAGENS
     # ============================================================
-    with tab3:
+    if aba_ativa == "🖼️ Galeria":
         st.markdown("### Galeria de Produtos")
 
         if not resultados_brutos:
@@ -1604,9 +1826,9 @@ def pagina_campineira(client_bq=None):
                         st.markdown("---")
 
     # ============================================================
-    # TAB 4 — PUBLICAR NO UPSELLER
+    # ABA 4 — PUBLICAR NO UPSELLER
     # ============================================================
-    with tab4:
+    if aba_ativa == "🚀 Publicar":
         st.markdown("### 🚀 Publicar Produtos no Upseller")
         st.markdown("---")
 
@@ -1616,64 +1838,12 @@ def pagina_campineira(client_bq=None):
             st.error("❌ Arquivo `modulo_upseller.py` não encontrado na mesma pasta!")
             st.stop()
 
-        driver_ups = widget_login_upseller()
+        widget_login_upseller(client_bq_pipeline)
 
-        # ── REPROCESSAR IMAGENS ──────────────────────────────────────
-        # Lista TODOS os produtos já publicados no Armazém, não só os com erro
-        # registrado — um upload pode "dar certo" e ainda assim subir a imagem
-        # errada (ex: um selo/badge do site de origem em vez da foto real), então
-        # não dá pra confiar só em erro pra saber quem precisa reprocessar.
-        # Reenvia só a imagem no anúncio já existente, sem criar SKU duplicado.
         # Reaproveita a mesma conexão do resto da página (client_bq_pipeline) em vez
         # de abrir outra — ver nota em pagina_campineira() sobre nunca importar
         # "LeMarketplace" daqui de dentro.
         client_bq_img = client_bq_pipeline
-
-        produtos_imagem_pendente = listar_produtos_imagem_pendente(client_bq_img)
-        if produtos_imagem_pendente:
-            with st.expander(f"🖼️ Reprocessar Imagens ({len(produtos_imagem_pendente)} publicados)", expanded=False):
-                busca_img = st.text_input(
-                    "Buscar por nome ou SKU", key="busca_reproc_img",
-                    placeholder="Digite pra filtrar (a lista completa não é exibida sem busca)"
-                )
-                itens_filtrados = []
-                if busca_img.strip():
-                    alvo = busca_img.strip().lower()
-                    itens_filtrados = [
-                        it for it in produtos_imagem_pendente
-                        if alvo in (it["nome"] or "").lower() or alvo in (it["sku_upseller"] or "").lower()
-                    ]
-                else:
-                    # Sem busca, mostra só quem tem aviso de imagem registrado —
-                    # evita renderizar centenas de cards de uma vez
-                    itens_filtrados = [it for it in produtos_imagem_pendente if "Imagem:" in (it["mensagem"] or "")]
-                    if itens_filtrados:
-                        st.caption(f"Mostrando {len(itens_filtrados)} com aviso de imagem registrado. Busque por nome/SKU pra reprocessar qualquer outro.")
-                    else:
-                        st.caption("Nenhum aviso de imagem registrado. Busque por nome/SKU pra reprocessar qualquer produto publicado.")
-
-                for item in itens_filtrados:
-                    sku_item = item["sku_upseller"]
-                    with st.container(border=True):
-                        col_info, col_btn = st.columns([4, 1])
-                        with col_info:
-                            st.markdown(f"**{item['nome']}**")
-                            st.caption(f"SKU: `{sku_item}` — {item['mensagem']}")
-                        with col_btn:
-                            if not st.session_state.get("ups_logado"):
-                                st.button("🔒 Reprocessar", key=f"reproc_img_{sku_item}", disabled=True,
-                                          use_container_width=True, help="Faça login no Upseller primeiro")
-                            else:
-                                if st.button("🔄 Reprocessar", key=f"reproc_img_{sku_item}", use_container_width=True):
-                                    from modulo_upseller import reprocessar_imagem_armazem
-                                    with st.spinner(f"Reenviando imagem do SKU {sku_item}..."):
-                                        ok_img, msg_img = reprocessar_imagem_armazem(
-                                            driver_ups, sku_item, item.get("imagem")
-                                        )
-                                    if ok_img:
-                                        st.success(msg_img)
-                                    else:
-                                        st.error(msg_img)
 
         # ── REPROCESSAR PUBLICAÇÕES COM ERRO NO ARMAZÉM ─────────────
         # Produtos cuja última tentativa de publicar no Armazém (Etapa 1) falhou —
@@ -1681,7 +1851,14 @@ def pagina_campineira(client_bq=None):
         # tenta publicar de novo do zero (gera um SKU novo).
         produtos_armazem_com_erro = listar_produtos_armazem_com_erro(client_bq_img)
         if produtos_armazem_com_erro:
-            with st.expander(f"🚀 Reprocessar Publicações com Erro no Armazém ({len(produtos_armazem_com_erro)})", expanded=False):
+            if "reproc_arm_aberto" not in st.session_state:
+                st.session_state["reproc_arm_aberto"] = False
+            seta_arm = "▲" if st.session_state["reproc_arm_aberto"] else "▼"
+            if st.button(f"🚀 Reprocessar Publicações com Erro no Armazém ({len(produtos_armazem_com_erro)}) {seta_arm}",
+                         use_container_width=True, key="btn_toggle_reproc_arm"):
+                st.session_state["reproc_arm_aberto"] = not st.session_state["reproc_arm_aberto"]
+                st.rerun()
+            if st.session_state["reproc_arm_aberto"]:
                 for item in produtos_armazem_com_erro:
                     id_item = item["id_produto"]
                     with st.container(border=True):
@@ -1700,20 +1877,13 @@ def pagina_campineira(client_bq=None):
                                           use_container_width=True, help="Faça login no Upseller primeiro")
                             else:
                                 if st.button("🔄 Reprocessar", key=f"reproc_arm_{id_item}", use_container_width=True):
-                                    from modulo_upseller import publicar_produto_upseller
+                                    # Reusa a mesma função do fluxo normal de publicar (gera
+                                    # SKU via tb_sku_registrados, registra em tb_produtos e no
+                                    # histórico) — antes esse botão reimplementava uma versão
+                                    # própria e incompleta, que nem chegava a registrar o SKU
+                                    # gerado em lugar nenhum além do evento do pipeline.
                                     with st.spinner(f"Publicando '{item['nome']}' de novo..."):
-                                        ok_arm, msg_arm = publicar_produto_upseller(driver_ups, item["produto"])
-                                    sku_gerado = None
-                                    if ok_arm:
-                                        f_sku = "upseller_sku_counter.json"
-                                        if os.path.exists(f_sku):
-                                            with open(f_sku) as f_sku_h:
-                                                num = json.load(f_sku_h).get("contador", 1)
-                                            sku_gerado = f"RJ-{num:05d}"
-                                    registrar_evento_pipeline_bq(
-                                        client_bq_img, id_item, sku_gerado, item["nome"], item.get("categoria"),
-                                        "armazem", "ok" if ok_arm else "erro", msg_arm
-                                    )
+                                        ok_arm, msg_arm = _publicar_um_produto_armazem(item["produto"], client_bq_img)
                                     if ok_arm:
                                         st.success(msg_arm)
                                     else:
@@ -1815,11 +1985,18 @@ def pagina_campineira(client_bq=None):
                         if not publicado:
                             if st.button("🗑️ Remover", key=f"btn_rem_{idx}", use_container_width=True):
                                 st.session_state["pub_excluidos"].add(p.get('id'))
-                                salvar_excluidos(st.session_state["pub_excluidos"])
+                                salvar_excluidos(st.session_state["pub_excluidos"], client_bq_pipeline)
                                 st.rerun()
 
             if validados_sem_imagem:
-                with st.expander(f"⚠️ Produtos Sem Imagem Válida — não publicáveis ({len(validados_sem_imagem)})", expanded=False):
+                if "sem_imagem_aberto" not in st.session_state:
+                    st.session_state["sem_imagem_aberto"] = False
+                seta_semimg = "▲" if st.session_state["sem_imagem_aberto"] else "▼"
+                if st.button(f"⚠️ Produtos Sem Imagem Válida — não publicáveis ({len(validados_sem_imagem)}) {seta_semimg}",
+                             use_container_width=True, key="btn_toggle_sem_imagem"):
+                    st.session_state["sem_imagem_aberto"] = not st.session_state["sem_imagem_aberto"]
+                    st.rerun()
+                if st.session_state["sem_imagem_aberto"]:
                     st.caption("Esses produtos capturaram algo errado no lugar da foto (ícone, selo ou logo do "
                                "site) e ficam bloqueados pra publicar até a imagem ser corrigida. Rode a varredura "
                                "dessa categoria de novo pra tentar recapturar a foto certa.")
@@ -1832,7 +2009,7 @@ def pagina_campineira(client_bq=None):
             with col_rest:
                 if excluidos and st.button("↩️ Restaurar removidos", use_container_width=True):
                     st.session_state["pub_excluidos"] = set()
-                    salvar_excluidos(set())
+                    salvar_excluidos(set(), client_bq_pipeline)
                     st.rerun()
 
             # Publicação em massa — marca "Selecionar" em vários cards e publica
@@ -1862,9 +2039,9 @@ def pagina_campineira(client_bq=None):
                 _renderizar_card_pendente(p, idx, permitir_publicar=True)
 
     # ============================================================
-    # TAB HISTÓRICO — ACERVO PERMANENTE DE PRODUTOS DA CAMPINEIRA
+    # ABA HISTÓRICO — ACERVO PERMANENTE DE PRODUTOS DA CAMPINEIRA
     # ============================================================
-    with tab_hist:
+    if aba_ativa == "🗂️ Histórico":
         st.markdown("### 🗂️ Histórico de Produtos da Campineira")
         st.caption(
             "Diferente da aba **Resultados** (que mostra só a última varredura), este é um "

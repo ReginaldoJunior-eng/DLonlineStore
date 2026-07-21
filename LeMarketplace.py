@@ -15,10 +15,7 @@ import plotly.graph_objects as go
 
 # --- CONFIGURAÇÕES DE INICIALIZAÇÃO ---
 
-if 'processando_venda' not in st.session_state:
-    st.session_state.processando_venda = False
-
-if 'pg' not in st.session_state: 
+if 'pg' not in st.session_state:
     st.session_state.pg = "Início"
 
 if 'logado' not in st.session_state: 
@@ -357,11 +354,15 @@ with st.sidebar:
             st.session_state.pg = "Campineira"
             st.rerun()
             
-        if st.button("📉 Dashboard Financeiro"): 
+        if st.button("📉 Dashboard Financeiro"):
             st.session_state.fin_acesso = False
             st.session_state.pg = "Dashboard"
             st.rerun()
-            
+
+        if st.button("🔎 Validar Vendas"):
+            st.session_state.pg = "Validar Vendas"
+            st.rerun()
+
         # --- BLOCO DE NOTAS ---
         st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
         st.markdown('<p style="color: #9ca3af; font-size: 12px; font-weight: 600; text-transform: uppercase; margin-bottom: 12px;">Produtividade</p>', unsafe_allow_html=True)
@@ -431,6 +432,400 @@ with st.sidebar:
         '<p style="text-align: center; color: #6b7280; font-size: 11px; margin-top: 12px;">Desenvolvido por DataStream BI</p>',
         unsafe_allow_html=True
     )
+
+def importar_pedidos_upseller_para_dashboard(client_bq, caminho_excel):
+    """Lê o Excel exportado do Upseller (Pedidos > Enviado) e insere em
+    tb_vendas_realizadas as vendas que ainda não estão lá (checa por
+    numero_pedido, nunca duplica um pedido já importado). Lucro líquido = valor
+    do pedido - custo de aquisição (via SKU em tb_produtos) - taxas da própria
+    plataforma (calcular_lucro_realizado, mesmas taxas usadas no resto do app).
+    Retorna (inseridas, duplicadas, erros, mensagens_de_erro)."""
+    import pandas as pd
+    from calculos_marketplace import calcular_lucro_realizado, obter_sku_base
+
+    df = pd.read_excel(caminho_excel)
+
+    def achar_coluna(nomes_exatos, *grupos_palavras_fallback):
+        """Tenta achar a coluna por NOME EXATO primeiro (case-insensitive) — mais
+        preciso que só palavra-chave, importante porque várias colunas do Excel da
+        Upseller compartilham palavras (ex: "Plataformas" e "Nº de Pedido da
+        Plataforma" ambas contêm "plataforma"; "quantidade mapeada" e "Quantidade
+        de Produtos" ambas contêm "quantidade"). Só cai pro fallback por
+        palavra-chave se nenhum nome exato bater (planilha com cabeçalho diferente)."""
+        cols_low = {c: str(c).strip().lower() for c in df.columns}
+        for nome in nomes_exatos:
+            alvo = nome.strip().lower()
+            for col, low in cols_low.items():
+                if low == alvo:
+                    return col
+        for palavras in grupos_palavras_fallback:
+            for col, low in cols_low.items():
+                if all(p in low for p in palavras):
+                    return col
+        return None
+
+    # Nomes confirmados no Excel real de "Pedidos > Enviado" do Upseller.
+    col_pedido = achar_coluna(["Nº de Pedido", "N° de Pedido"], ("número", "pedido"), ("pedido", "id"))
+    col_pagamento = achar_coluna(["Hora do Pagamento"], ("hora", "pagamento"), ("pagamento",))
+    col_plataforma = achar_coluna(["Plataformas", "Plataforma"], ("plataforma",))
+    # "SKU (Armazém)" costuma vir vazia pra boa parte das linhas do export — cai
+    # pra coluna "SKU" (a da plataforma) quando a do armazém estiver em branco.
+    col_sku_armazem = achar_coluna(["SKU (Armazém)", "SKU (Armazem)"], ("sku", "armaz"))
+    col_sku_plain = achar_coluna(["SKU"], ("sku",))
+    col_valor = achar_coluna(["Valor do Pedido"], ("valor", "pedido"))
+    col_qtd = achar_coluna(["Qtd. do Produto", "Qtd do Produto", "Quantidade de Produtos"], ("qtd", "produto"))
+    # Mesma lógica pro nome: "Nome do Produto" também costuma vir vazia — cai
+    # pra "Nome do Anúncio" (nome usado no anúncio da plataforma).
+    col_nome_produto = achar_coluna(["Nome do Produto"], ("nome", "produto"))
+    col_nome_anuncio = achar_coluna(["Nome do Anúncio", "Nome do Anuncio"], ("nome", "anúncio"), ("nome", "anuncio"))
+
+    faltando = [nome for nome, col in [
+        ("Número do Pedido", col_pedido), ("Hora do Pagamento", col_pagamento),
+        ("Plataforma", col_plataforma), ("Valor do Pedido", col_valor),
+    ] if col is None]
+    if col_sku_armazem is None and col_sku_plain is None:
+        faltando.append("SKU")
+    if faltando:
+        return 0, 0, 0, [f"Não encontrei as colunas: {', '.join(faltando)}. "
+                          f"Colunas disponíveis no Excel: {list(df.columns)}"]
+
+    table_vendas = "leandro-marketplace.DL_Store_Online.tb_vendas_realizadas"
+    table_produtos = "leandro-marketplace.DL_Store_Online.tb_produtos"
+
+    # Pedidos já importados antes — carregado uma vez só (não 1 query por linha).
+    pedidos_existentes = set()
+    try:
+        df_exist = client_bq.query(
+            f"SELECT DISTINCT numero_pedido FROM `{table_vendas}` WHERE numero_pedido IS NOT NULL"
+        ).to_dataframe()
+        pedidos_existentes = set(df_exist["numero_pedido"].astype(str))
+    except Exception:
+        pass  # coluna numero_pedido pode ainda não existir na tabela (rode o ALTER TABLE)
+
+    custos_por_sku = {}
+    try:
+        df_custos = client_bq.query(f"SELECT sku, custo_aquisicao FROM `{table_produtos}`").to_dataframe()
+        custos_por_sku = df_custos.groupby("sku")["custo_aquisicao"].first().to_dict()
+    except Exception:
+        pass
+
+    def _normalizar_plataforma(bruto):
+        b = str(bruto or "").strip().lower()
+        if "shopee" in b: return "shopee"
+        if "shein" in b: return "shein"
+        if "tiktok" in b or "tik tok" in b: return "tiktok"
+        if "temu" in b: return "temu"
+        return b
+
+    inseridas, duplicadas, erros = 0, 0, 0
+    msgs_erro = []
+    linhas_novas = []
+
+    for _, row in df.iterrows():
+        try:
+            numero_pedido = str(row[col_pedido]).strip()
+            if not numero_pedido or numero_pedido.lower() == "nan":
+                continue
+            if numero_pedido in pedidos_existentes:
+                duplicadas += 1
+                continue
+
+            # Pedido com várias linhas de produto costuma repetir o Nº de Pedido e
+            # só preencher "Valor do Pedido" na linha principal — as outras vêm
+            # zeradas/vazias pra não contar o valor do pedido mais de uma vez.
+            # Ignora essas linhas "extras" (não é erro, só não é a linha certa).
+            if pd.isna(row[col_valor]) or float(row[col_valor]) == 0:
+                continue
+
+            data_pagamento = pd.to_datetime(row[col_pagamento]).date()
+            plataforma = _normalizar_plataforma(row[col_plataforma])
+
+            sku_armazem = str(row[col_sku_armazem]).strip() if col_sku_armazem and pd.notna(row[col_sku_armazem]) else ""
+            sku_plain = str(row[col_sku_plain]).strip() if col_sku_plain and pd.notna(row[col_sku_plain]) else ""
+            sku = sku_armazem or sku_plain
+
+            valor_pedido = float(row[col_valor])
+            quantidade = int(row[col_qtd]) if col_qtd and pd.notna(row[col_qtd]) else 1
+
+            nome_prod_val = str(row[col_nome_produto]).strip() if col_nome_produto and pd.notna(row[col_nome_produto]) else ""
+            nome_anuncio_val = str(row[col_nome_anuncio]).strip() if col_nome_anuncio and pd.notna(row[col_nome_anuncio]) else ""
+            nome_produto = nome_prod_val or nome_anuncio_val or sku
+
+            # SKU exato sem custo cadastrado? cai pro custo do SKU principal (sem o
+            # sufixo de variante/cor) — ex: CP-784-AM usa o custo de CP-784.
+            custo_aquisicao = custos_por_sku.get(sku)
+            if custo_aquisicao is None:
+                custo_aquisicao = custos_por_sku.get(obter_sku_base(sku))
+            custo_aquisicao = float(custo_aquisicao or 0)
+            # Sem custo achado (nem exato, nem via SKU principal) = lucro calculado
+            # às cegas (custo 0). Marca como pendente pra NÃO entrar no Dashboard
+            # ainda — só sai de pendente quando o SKU for cadastrado na aba
+            # Validar Vendas (que recalcula e desmarca essa flag).
+            pendente = custo_aquisicao <= 0
+            lucro = calcular_lucro_realizado(valor_pedido, custo_aquisicao, plataforma)
+
+            linhas_novas.append({
+                "produto": nome_produto,
+                "sku": sku,
+                "preco_venda": valor_pedido,
+                "quantidade": quantidade,
+                "data": data_pagamento.strftime("%Y-%m-%d"),
+                "lucro_total": round(lucro, 2),
+                "mkt_venda": plataforma,
+                "numero_pedido": numero_pedido,
+                "pendente": pendente,
+            })
+            pedidos_existentes.add(numero_pedido)  # evita duplicar dentro do mesmo arquivo
+            inseridas += 1
+        except Exception as e:
+            erros += 1
+            msgs_erro.append(f"Pedido {row.get(col_pedido, '?')}: {str(e)[:100]}")
+
+    if linhas_novas:
+        # load_table_from_dataframe (carga em lote) em vez de insert_rows_json
+        # (streaming): linhas gravadas via streaming ficam presas no "streaming
+        # buffer" por um tempo, bloqueando DELETE/UPDATE — mesmo problema já visto
+        # em outras tabelas desse projeto.
+        try:
+            df_novas = pd.DataFrame(linhas_novas)
+            # "data" precisa virar datetime64 de verdade (não string solta) — o
+            # pandas guarda como coluna "object" e o pyarrow não consegue inferir
+            # sozinho um tipo de data pra isso, e falha a conversão pro formato que
+            # o BigQuery espera. O schema explícito também evita qualquer
+            # autodetecção errada de outro campo.
+            df_novas["data"] = pd.to_datetime(df_novas["data"]).dt.date
+            job_config = bigquery.LoadJobConfig(schema=[
+                bigquery.SchemaField("produto", "STRING"),
+                bigquery.SchemaField("sku", "STRING"),
+                bigquery.SchemaField("preco_venda", "FLOAT"),
+                bigquery.SchemaField("quantidade", "INTEGER"),
+                bigquery.SchemaField("data", "DATE"),
+                bigquery.SchemaField("lucro_total", "FLOAT"),
+                bigquery.SchemaField("mkt_venda", "STRING"),
+                bigquery.SchemaField("numero_pedido", "STRING"),
+                bigquery.SchemaField("pendente", "BOOLEAN"),
+            ])
+            client_bq.load_table_from_dataframe(df_novas, table_vendas, job_config=job_config).result()
+        except Exception as e:
+            erros += len(linhas_novas)
+            inseridas = 0
+            msgs_erro.append(f"Erro ao inserir no BigQuery: {str(e)[:300]}")
+
+    return inseridas, duplicadas, erros, msgs_erro
+
+
+def buscar_pendencias_validacao(client_bq):
+    """Levanta os dois problemas que deixam o lucro calculado errado: SKU
+    vendido que não tem cadastro em tb_produtos (custo vira 0), e SKU
+    cadastrado com custo de aquisição divergente entre as linhas por
+    marketplace (o sistema pega uma delas meio ao acaso na hora de calcular)."""
+    table_vendas = "leandro-marketplace.DL_Store_Online.tb_vendas_realizadas"
+    table_produtos = "leandro-marketplace.DL_Store_Online.tb_produtos"
+
+    # Uma variante (CP-784-AM) não conta como "sem cadastro" se o SKU principal
+    # dela (CP-784, sem o sufixo depois do 2º hífen) já tem custo cadastrado —
+    # nesse caso o custo do principal é usado como fallback automaticamente
+    # (ver obter_sku_base / importar_pedidos_upseller_para_dashboard).
+    q_sem_cadastro = f"""
+        SELECT v.sku, ANY_VALUE(v.produto) AS produto,
+               COUNT(*) AS vendas, SUM(v.preco_venda) AS faturamento,
+               MIN(v.data) AS data_min, MAX(v.data) AS data_max
+        FROM `{table_vendas}` v
+        LEFT JOIN (SELECT DISTINCT sku FROM `{table_produtos}`) p
+          ON v.sku = p.sku
+          OR REGEXP_EXTRACT(v.sku, r'^([A-Za-z]+-\\d+)-.+$') = p.sku
+        WHERE p.sku IS NULL AND v.sku IS NOT NULL AND v.sku != ''
+        GROUP BY v.sku
+        ORDER BY faturamento DESC
+    """
+    df_sem_cadastro = client_bq.query(q_sem_cadastro).to_dataframe()
+
+    # Traz também quantas vendas cada SKU divergente já teve — dá pra ver de
+    # cara quais desses são urgentes (têm venda de verdade pendurada) e quais
+    # são só inconsistência de catálogo sem impacto ainda.
+    q_divergentes = f"""
+        SELECT p.sku, ANY_VALUE(p.produto) AS produto,
+               ARRAY_AGG(DISTINCT p.custo_aquisicao ORDER BY p.custo_aquisicao) AS valores,
+               COUNT(v.numero_pedido) AS vendas
+        FROM `{table_produtos}` p
+        LEFT JOIN `{table_vendas}` v ON v.sku = p.sku
+        GROUP BY p.sku
+        HAVING COUNT(DISTINCT p.custo_aquisicao) > 1
+        ORDER BY vendas DESC, p.sku
+    """
+    df_divergentes_raw = client_bq.query(q_divergentes).to_dataframe()
+    df_divergentes = _agrupar_divergentes_por_sku_base(df_divergentes_raw)
+
+    return df_sem_cadastro, df_divergentes
+
+
+def _agrupar_divergentes_por_sku_base(df):
+    """Uma variante (CP-209-RS, cor rosa) e sua irmã (CP-209-AZ, cor azul) são o
+    MESMO produto físico — custo de aquisição não muda por cor/tamanho. Corrigir
+    uma sem corrigir a outra deixa a divergência pela metade. Agrupa as linhas de
+    SKU divergente pelo SKU principal (sem sufixo de variante) pra corrigir a
+    família inteira de uma vez, com um custo só."""
+    from calculos_marketplace import obter_sku_base
+
+    if df.empty:
+        return pd.DataFrame(columns=["sku_base", "skus", "produto", "valores", "vendas"])
+
+    df = df.copy()
+    df["sku_base"] = df["sku"].apply(obter_sku_base)
+
+    linhas = []
+    for base, grupo in df.groupby("sku_base"):
+        grupo_ordenado = grupo.sort_values("vendas", ascending=False)
+        valores_unicos = sorted({round(float(v), 2) for lista in grupo["valores"] for v in lista})
+        linhas.append({
+            "sku_base": base,
+            "skus": grupo_ordenado["sku"].tolist(),
+            "produto": grupo_ordenado["produto"].iloc[0],
+            "valores": valores_unicos,
+            "vendas": int(grupo["vendas"].sum()),
+        })
+    return pd.DataFrame(linhas).sort_values("vendas", ascending=False).reset_index(drop=True)
+
+
+def _recalcular_lucro_por_sku(client_bq, sku, custo_aquisicao):
+    """Depois de corrigir o custo de aquisição de um SKU (cadastro novo ou
+    correção de divergência), as vendas JÁ importadas desse SKU ficaram com
+    lucro_total calculado com o custo antigo (0 ou errado) — recalcula e
+    atualiza essas linhas em tb_vendas_realizadas de uma vez, via UPDATE ...
+    FROM UNNEST (sem precisar de tabela de staging)."""
+    from calculos_marketplace import calcular_lucro_realizado
+
+    table_vendas = "leandro-marketplace.DL_Store_Online.tb_vendas_realizadas"
+
+    job_config = bigquery.QueryJobConfig(query_parameters=[
+        bigquery.ScalarQueryParameter("sku", "STRING", sku)
+    ])
+    df = client_bq.query(
+        f"SELECT numero_pedido, preco_venda, mkt_venda FROM `{table_vendas}` "
+        f"WHERE sku = @sku AND numero_pedido IS NOT NULL",
+        job_config=job_config,
+    ).to_dataframe()
+    if df.empty:
+        return 0
+
+    structs = []
+    for _, row in df.iterrows():
+        novo_lucro = calcular_lucro_realizado(float(row["preco_venda"]), custo_aquisicao, row["mkt_venda"])
+        structs.append(bigquery.StructQueryParameter(
+            None,
+            bigquery.ScalarQueryParameter("numero_pedido", "STRING", str(row["numero_pedido"])),
+            bigquery.ScalarQueryParameter("lucro_total", "FLOAT64", round(float(novo_lucro), 2)),
+        ))
+
+    array_param = bigquery.ArrayQueryParameter("correcoes", "STRUCT", structs)
+    update_sql = f"""
+        UPDATE `{table_vendas}` v
+        SET lucro_total = c.lucro_total, pendente = FALSE
+        FROM UNNEST(@correcoes) AS c
+        WHERE v.numero_pedido = c.numero_pedido
+    """
+    client_bq.query(update_sql, job_config=bigquery.QueryJobConfig(query_parameters=[array_param])).result()
+    return len(structs)
+
+
+def resolver_sku_sem_cadastro(client_bq, sku, produto, custo_aquisicao):
+    """Cadastra um SKU novo em tb_produtos — uma linha por marketplace, mesmo
+    custo pras 4 — e recalcula o lucro das vendas já importadas desse SKU."""
+    table_produtos = "leandro-marketplace.DL_Store_Online.tb_produtos"
+    lote = [{
+        "marketplace": mkt, "sku": sku, "produto": produto, "custo_aquisicao": float(custo_aquisicao),
+    } for mkt in ["shein", "shopee", "temu", "tiktok"]]
+    client_bq.load_table_from_dataframe(pd.DataFrame(lote), table_produtos).result()
+    return _recalcular_lucro_por_sku(client_bq, sku, float(custo_aquisicao))
+
+
+def resolver_sku_divergente(client_bq, sku, novo_custo):
+    """Unifica o custo_aquisicao de um SKU em todas as linhas (uma por
+    marketplace) de tb_produtos e recalcula o lucro das vendas já importadas."""
+    table_produtos = "leandro-marketplace.DL_Store_Online.tb_produtos"
+    job_config = bigquery.QueryJobConfig(query_parameters=[
+        bigquery.ScalarQueryParameter("novo_custo", "FLOAT64", float(novo_custo)),
+        bigquery.ScalarQueryParameter("sku", "STRING", sku),
+    ])
+    client_bq.query(
+        f"UPDATE `{table_produtos}` SET custo_aquisicao = @novo_custo WHERE sku = @sku",
+        job_config=job_config,
+    ).result()
+    return _recalcular_lucro_por_sku(client_bq, sku, float(novo_custo))
+
+
+def resolver_grupo_divergente(client_bq, skus, novo_custo):
+    """Como resolver_sku_divergente, mas pra uma família inteira de variantes
+    (mesmo SKU principal, cores/tamanhos diferentes) de uma vez — cor/tamanho
+    não muda o custo de aquisição do produto, então corrigir só uma variante e
+    deixar as irmãs com o valor velho não faz sentido."""
+    table_produtos = "leandro-marketplace.DL_Store_Online.tb_produtos"
+    job_config = bigquery.QueryJobConfig(query_parameters=[
+        bigquery.ScalarQueryParameter("novo_custo", "FLOAT64", float(novo_custo)),
+        bigquery.ArrayQueryParameter("skus", "STRING", list(skus)),
+    ])
+    client_bq.query(
+        f"UPDATE `{table_produtos}` SET custo_aquisicao = @novo_custo WHERE sku IN UNNEST(@skus)",
+        job_config=job_config,
+    ).result()
+    total_recalculadas = 0
+    for sku in skus:
+        total_recalculadas += _recalcular_lucro_por_sku(client_bq, sku, float(novo_custo))
+    return total_recalculadas
+
+
+def aplicar_fallback_sku_base(client_bq):
+    """Recalcula de uma vez o lucro de todas as vendas já importadas cujo SKU
+    exato não tem custo cadastrado, mas o SKU principal (sem o sufixo de
+    variante/cor) tem — mesma regra usada na importação (obter_sku_base),
+    aplicada retroativamente no histórico que ficou pra trás antes desse
+    fallback existir. Não pede nada digitado: o custo já é conhecido via o
+    principal."""
+    from calculos_marketplace import calcular_lucro_realizado, obter_sku_base
+
+    table_vendas = "leandro-marketplace.DL_Store_Online.tb_vendas_realizadas"
+    table_produtos = "leandro-marketplace.DL_Store_Online.tb_produtos"
+
+    df_prod = client_bq.query(f"SELECT DISTINCT sku, custo_aquisicao FROM `{table_produtos}`").to_dataframe()
+    custos_por_sku = df_prod.groupby("sku")["custo_aquisicao"].first().to_dict()
+    skus_cadastrados = set(custos_por_sku.keys())
+
+    df_v = client_bq.query(
+        f"SELECT numero_pedido, sku, preco_venda, mkt_venda FROM `{table_vendas}` "
+        f"WHERE numero_pedido IS NOT NULL AND sku IS NOT NULL AND sku != ''"
+    ).to_dataframe()
+    if df_v.empty:
+        return 0
+
+    structs = []
+    for _, row in df_v.iterrows():
+        sku = row["sku"]
+        if sku in skus_cadastrados:
+            continue  # já tem custo próprio, não é caso de fallback
+        base = obter_sku_base(sku)
+        if base == sku or base not in skus_cadastrados:
+            continue  # não é variante, ou nem o principal tem custo cadastrado
+        custo = float(custos_por_sku[base] or 0)
+        novo_lucro = calcular_lucro_realizado(float(row["preco_venda"]), custo, row["mkt_venda"])
+        structs.append(bigquery.StructQueryParameter(
+            None,
+            bigquery.ScalarQueryParameter("numero_pedido", "STRING", str(row["numero_pedido"])),
+            bigquery.ScalarQueryParameter("lucro_total", "FLOAT64", round(float(novo_lucro), 2)),
+        ))
+
+    if not structs:
+        return 0
+
+    array_param = bigquery.ArrayQueryParameter("correcoes", "STRUCT", structs)
+    update_sql = f"""
+        UPDATE `{table_vendas}` v
+        SET lucro_total = c.lucro_total, pendente = FALSE
+        FROM UNNEST(@correcoes) AS c
+        WHERE v.numero_pedido = c.numero_pedido
+    """
+    client_bq.query(update_sql, job_config=bigquery.QueryJobConfig(query_parameters=[array_param])).result()
+    return len(structs)
+
 
 # --- LÓGICA DE PÁGINAS ---
 
@@ -758,7 +1153,11 @@ elif st.session_state.pg == "Alterar Preco":
 
     df_produtos = listar_skus_disponiveis()
 
-    with st.expander("➕ Adicionar Item para Alteração", expanded=True):
+    # st.container em vez de st.expander (sempre expanded=True aqui, e o expander
+    # nativo depende de uma fonte de ícone externa pra desenhar a seta — quando
+    # não carrega, sobrepõe o texto do título com o nome cru do ícone).
+    with st.container(border=True):
+        st.markdown("**➕ Adicionar Item para Alteração**")
         opcoes = df_produtos.apply(lambda x: f"{x['sku']} - {x['produto']}", axis=1).tolist()
         
         selecao_item = st.selectbox(
@@ -862,78 +1261,77 @@ elif st.session_state.pg == "Dashboard":
     from datetime import timedelta
     import plotly.graph_objects as go
     from plotly.subplots import make_subplots
-    st.markdown('<h1>📊 Dashboard Financeiro</h1>', unsafe_allow_html=True)
+
+    col_titulo, col_atualizar = st.columns([4, 1])
+    with col_titulo:
+        st.markdown('<h1>📊 Dashboard Financeiro</h1>', unsafe_allow_html=True)
+    with col_atualizar:
+        st.markdown("<div style='padding-top:28px'></div>", unsafe_allow_html=True)
+        if st.button("🔄 Atualizar", type="primary", use_container_width=True):
+            st.session_state["dash_atualizar_aberto"] = not st.session_state.get("dash_atualizar_aberto", False)
     st.markdown('<div class="section-header"></div>', unsafe_allow_html=True)
-    
-    if 'processando_venda' not in st.session_state:
-        st.session_state.processando_venda = False
 
-    with st.expander("➕ Registrar Nova Venda", expanded=True):
-        if not df_base_completa.empty:
-            df_dash = df_base_completa.copy()
-            df_dash['Custo_num'] = df_dash['Custo_aquisicao'].apply(converter_custo_seguro)
-            
-            col_p1, col_p2 = st.columns(2)
-            
-            with col_p1:
-                v_prod_sel = st.selectbox("Pesquisar por Nome", sorted(df_dash['Produto'].unique()), index=None, placeholder="Busque o Produto...")
-            with col_p2:
-                v_sku_sel = st.selectbox("Pesquisar por SKU", sorted(df_dash['SKU'].unique()), index=None, placeholder="Busque o SKU...")
+    if st.session_state.get("dash_atualizar_aberto"):
+        with st.container(border=True):
+            st.markdown("#### 🔄 Atualizar Dashboard via Upseller")
+            st.caption(
+                "Faz login no Upseller (se precisar) e exporta automaticamente todos os pedidos "
+                "de 'Pedidos > Enviado', registrando as vendas novas — pedidos já importados antes "
+                "são ignorados (nunca duplica)."
+            )
+            from modulo_upseller import widget_login_upseller, exportar_pedidos_shipped_upseller
+            widget_login_upseller(client_bq)
 
-            item_venda = None
-            if v_sku_sel: item_venda = df_dash[df_dash['SKU'] == v_sku_sel].iloc[0]
-            elif v_prod_sel: item_venda = df_dash[df_dash['Produto'] == v_prod_sel].iloc[0]
+            # Mostra o resultado da ÚLTIMA tentativa de forma persistente — antes a
+            # mensagem sumia na hora por causa do st.rerun() logo em seguida, dando
+            # a impressão de que nada tinha acontecido (ou deixando sem saber o
+            # resultado real, como aconteceu aqui).
+            resultado_ant = st.session_state.get("dash_import_resultado")
+            if resultado_ant:
+                if resultado_ant.get("ok") is False:
+                    st.error(resultado_ant["msg"])
+                else:
+                    if resultado_ant.get("inseridas"):
+                        st.success(f"✅ {resultado_ant['inseridas']} venda(s) nova(s) registrada(s).")
+                    if resultado_ant.get("duplicadas"):
+                        st.info(f"↩️ {resultado_ant['duplicadas']} pedido(s) já estavam registrados (ignorados).")
+                    if resultado_ant.get("erros"):
+                        st.warning(f"⚠️ {resultado_ant['erros']} linha(s) com problema:")
+                        for m in resultado_ant.get("msgs_erro", [])[:10]:
+                            st.caption(f"- {m}")
 
-            if item_venda is not None:
-                v_nome_final, v_sku_final, v_custo_base = item_venda['Produto'], item_venda['SKU'], item_venda['Custo_num']
-                st.markdown(f"""
-                <div style="background: linear-gradient(135deg, #dbeafe 0%, #e0f2fe 100%); border: 1px solid #7dd3fc; border-radius: 12px; padding: 16px; margin-bottom: 20px;">
-                <p style="margin: 0; color: #0369a1;"><strong>✓</strong> {v_nome_final} | <code>{v_sku_final}</code> | Base: <strong>R$ {v_custo_base:.2f}</strong></p>
-                </div>
-                """, unsafe_allow_html=True)
-                
-                c_v1, c_v2, c_v3 = st.columns(3)
-                with c_v1:
-                    mkt_venda = st.selectbox("Canal de Venda", ["shein", "shopee", "temu", "tiktok"])
-                    v_qtd = st.number_input("Qtd Vendida", min_value=1, value=1)
-                with c_v2:
-                    v_preco_venda = st.number_input("Preço de Venda Praticado (R$)", min_value=0.0, step=0.01, value=0.0)
-                    imp, c_fixo = 0.06, 1.00
-                    if mkt_venda == "shein": com, tax = 0.18, 5.0
-                    elif mkt_venda == "shopee": com, tax = 0.20, (4.0 if v_custo_base < 50 else 20.0)
-                    elif mkt_venda == "tiktok": com, tax = 0.12, 4.0
-                    else: com, tax = 0.0, 0.0
-                    lucro_un_calc = v_preco_venda - (v_preco_venda * com) - (v_preco_venda * imp) - v_custo_base - c_fixo - tax
-                    v_margem_auto = (lucro_un_calc / v_preco_venda * 100) if v_preco_venda > 0 else 0.0
-                    st.markdown(f"<p style='text-align: center; color: #059669; font-size: 14px; font-weight: 600; margin-top: 24px;'>📈 Margem: <strong>{v_margem_auto:.1f}%</strong></p>", unsafe_allow_html=True)
-                with c_v3:
-                    v_data = st.date_input("Data da Venda", value=(datetime.utcnow() - timedelta(hours=3)))
-                    lucro_total_dinamico = lucro_un_calc * v_qtd
-                    st.metric("Lucro Total", f"R$ {lucro_total_dinamico:.2f}")
-
-                if not st.session_state.processando_venda:
-                    if st.button("🚀 Confirmar e Registrar Venda", type="primary", use_container_width=True):
-                        st.session_state.processando_venda = True
+            if st.session_state.get("ups_logado"):
+                if st.button("📊 Buscar Pedidos Enviados do Upseller", type="primary", use_container_width=True, key="btn_buscar_pedidos_topo"):
+                    import tempfile
+                    pasta_download = os.path.join(tempfile.gettempdir(), "upseller_exports")
+                    driver = st.session_state.get("ups_driver")
+                    with st.spinner("Exportando pedidos do Upseller (pode levar um tempinho com muitas páginas)..."):
+                        ok_exp, resultado = exportar_pedidos_shipped_upseller(driver, pasta_download)
+                    if not ok_exp:
+                        st.session_state["dash_import_resultado"] = {"ok": False, "msg": resultado}
+                    else:
+                        with st.spinner("Processando planilha e registrando vendas novas..."):
+                            inseridas, duplicadas, erros, msgs_erro = importar_pedidos_upseller_para_dashboard(client_bq, resultado)
+                        st.session_state["dash_import_resultado"] = {
+                            "ok": True, "inseridas": inseridas, "duplicadas": duplicadas,
+                            "erros": erros, "msgs_erro": msgs_erro,
+                        }
                         try:
-                            table_id = "leandro-marketplace.DL_Store_Online.tb_vendas_realizadas"
-                            v_data_formatada = v_data.strftime("%Y-%m-%d") 
-                            row = [{
-                                "produto": str(v_nome_final), "sku": str(v_sku_final), 
-                                "preco_venda": float(v_preco_venda), "quantidade": int(v_qtd), 
-                                "data": v_data_formatada, "lucro_total": float(round(lucro_total_dinamico, 2)),
-                                "mkt_venda": str(mkt_venda)
-                            }]
-                            errors = client_bq.insert_rows_json(table_id, row)
-                            if not errors:
-                                st.success("Venda registrada!"); st.cache_data.clear(); st.session_state.processando_venda = False; st.rerun()
-                            else:
-                                st.error(f"Erro BQ: {errors}"); st.session_state.processando_venda = False
-                        except Exception as e:
-                            st.error(f"Erro: {e}"); st.session_state.processando_venda = False
+                            os.remove(resultado)
+                        except Exception:
+                            pass
+                        st.cache_data.clear()
+                    st.rerun()
 
-    st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
     try:
-        query = "SELECT * FROM `leandro-marketplace.DL_Store_Online.tb_vendas_realizadas` ORDER BY data DESC"
+        # Vendas "pendente = TRUE" (SKU sem custo cadastrado, lucro calculado com
+        # custo 0) ficam de fora do Dashboard até serem resolvidas na aba Validar
+        # Vendas — registro antigo sem essa coluna preenchida (NULL) conta como
+        # não-pendente, pra não sumir histórico de antes dessa flag existir.
+        query = ("SELECT produto, sku, preco_venda, quantidade, data, lucro_total, mkt_venda "
+                  "FROM `leandro-marketplace.DL_Store_Online.tb_vendas_realizadas` "
+                  "WHERE pendente IS NULL OR pendente = FALSE "
+                  "ORDER BY data DESC")
         df_vendas = client_bq.query(query).to_dataframe()
 
         if not df_vendas.empty:
@@ -941,7 +1339,11 @@ elif st.session_state.pg == "Dashboard":
             df_vendas['Preço Venda'] = pd.to_numeric(df_vendas['Preço Venda'])
             df_vendas['Lucro Total'] = pd.to_numeric(df_vendas['Lucro Total'])
             df_vendas['Quantidade'] = pd.to_numeric(df_vendas['Quantidade'])
-            df_vendas['Faturamento'] = df_vendas['Preço Venda'] * df_vendas['Quantidade']
+            # 'Preço Venda' já é o Valor do Pedido inteiro (não um preço unitário),
+            # então o faturamento é o próprio valor — não multiplicar pela Quantidade
+            # (senão infla o faturamento, e por tabela o "Outros Custos", em pedidos
+            # com mais de 1 unidade do mesmo produto).
+            df_vendas['Faturamento'] = df_vendas['Preço Venda']
             df_vendas['Data'] = pd.to_datetime(df_vendas['Data'])
             
             hoje = datetime.utcnow() - timedelta(hours=3)
@@ -1110,39 +1512,162 @@ elif st.session_state.pg == "Dashboard":
             )
 
             st.plotly_chart(fig_pizza, use_container_width=True, config={'displayModeBar': False})
-            
-            st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
-            st.markdown('<h3>📋 Histórico de Vendas</h3>', unsafe_allow_html=True)
-            
-            st.markdown("""
-                <div style="display: flex; font-weight: 600; background-color: #F3F4F6; padding: 12px 16px; border: 1px solid #E5E7EB; border-radius: 10px 10px 0 0; color: #374151; font-size: 13px;">
-                    <div style="flex: 3;">Produto</div>
-                    <div style="flex: 2;">SKU</div>
-                    <div style="flex: 1;">Qtd</div>
-                    <div style="flex: 2;">Data</div>
-                    <div style="flex: 2;">Lucro</div>
-                    <div style="flex: 1;">Ação</div>
-                </div>
-            """, unsafe_allow_html=True)
-            
-            with st.container(height=500):
-                for idx, row in df_vendas.iterrows():
-                    cols = st.columns([3, 2, 1, 2, 2, 1])
-                    cols[0].write(row['Produto'])
-                    cols[1].write(f"`{row['SKU']}`")
-                    cols[2].write(str(int(row['Quantidade'])))
-                    cols[3].write(row['Data'].strftime('%d/%m/%Y'))
-                    cols[4].write(f"R$ {row['Lucro Total']:.2f}")
-                    
-                    if cols[5].button("❌", key=f"del_{idx}"):
-                        client_bq.query(f"DELETE FROM `leandro-marketplace.DL_Store_Online.tb_vendas_realizadas` WHERE sku = '{row['SKU']}' AND data = '{row['Data'].strftime('%Y-%m-%d')}' AND lucro_total = {row['Lucro Total']}").result()
-                        st.cache_data.clear()
-                        st.rerun()
-            
+
         else:
             st.info("Nenhuma venda registrada ainda.")
     except Exception as e:
         st.error(f"Erro no Dashboard: {e}")
+
+# --- PÁGINA VALIDAR VENDAS ---
+elif st.session_state.pg == "Validar Vendas":
+    st.markdown('<h1>🔎 Validação de Vendas</h1>', unsafe_allow_html=True)
+    st.markdown('<div class="section-header"></div>', unsafe_allow_html=True)
+    st.caption(
+        "Corrige os dois problemas que deixam o lucro do Dashboard Financeiro errado: "
+        "SKU vendido sem cadastro na base (custo vira R$0) e SKU cadastrado com custo "
+        "divergente entre marketplaces. Ao salvar, o lucro das vendas já importadas "
+        "desse SKU é recalculado automaticamente."
+    )
+    st.caption(
+        "SKU de variante (ex: CP-784-AM) sem custo próprio cadastrado usa o custo do "
+        "SKU principal (CP-784) automaticamente — não precisa cadastrar cada cor. "
+        "O botão abaixo aplica isso no histórico de vendas já importado."
+    )
+
+    try:
+        n_pendentes = client_bq.query(
+            "SELECT COUNT(*) AS n FROM `leandro-marketplace.DL_Store_Online.tb_vendas_realizadas` WHERE pendente = TRUE"
+        ).to_dataframe()["n"][0]
+    except Exception:
+        n_pendentes = None
+
+    if n_pendentes:
+        st.warning(
+            f"⏸️ {int(n_pendentes)} venda(s) fora do Dashboard Financeiro por enquanto — SKU sem custo "
+            f"cadastrado. Assim que você resolver o SKU abaixo, elas entram automaticamente."
+        )
+    elif n_pendentes == 0:
+        st.success("Nenhuma venda represada esperando cadastro. Tudo que está registrado já entra no Dashboard.")
+
+    if st.button("🔁 Aplicar custo do SKU principal nas vendas já importadas"):
+        try:
+            n_corrigidas = aplicar_fallback_sku_base(client_bq)
+            st.session_state["validacao_resultado"] = {
+                "ok": True,
+                "msg": f"{n_corrigidas} venda(s) recalculada(s) usando o custo do SKU principal." if n_corrigidas
+                       else "Nenhuma venda pendente pra esse tipo de correção.",
+            }
+            st.cache_data.clear()
+        except Exception as e:
+            st.session_state["validacao_resultado"] = {"ok": False, "msg": f"Erro ao aplicar fallback: {e}"}
+        st.rerun()
+
+    resultado_validacao = st.session_state.get("validacao_resultado")
+    if resultado_validacao:
+        if resultado_validacao["ok"]:
+            st.success(resultado_validacao["msg"])
+        else:
+            st.error(resultado_validacao["msg"])
+        st.session_state["validacao_resultado"] = None
+
+    try:
+        df_sem_cadastro, df_divergentes = buscar_pendencias_validacao(client_bq)
+    except Exception as e:
+        st.error(f"Erro ao buscar pendências: {e}")
+        df_sem_cadastro, df_divergentes = pd.DataFrame(), pd.DataFrame()
+
+    st.markdown(f'<h3>🚨 SKUs vendidos sem cadastro ({len(df_sem_cadastro)})</h3>', unsafe_allow_html=True)
+    if df_sem_cadastro.empty:
+        st.success("Nenhum SKU pendente. 🎉")
+    else:
+        for _, row in df_sem_cadastro.iterrows():
+            with st.container(border=True):
+                c1, c2, c3, c4 = st.columns([1.4, 2.6, 1.3, 1])
+                with c1:
+                    st.text_input("SKU", value=row["sku"], disabled=True, key=f"sc_sku_{row['sku']}")
+                with c2:
+                    nome_input = st.text_input("Produto", value=row["produto"] or "", key=f"sc_nome_{row['sku']}")
+                with c3:
+                    custo_input = st.number_input(
+                        "Custo de aquisição (R$)", min_value=0.0, step=0.01, value=0.0, key=f"sc_custo_{row['sku']}"
+                    )
+                with c4:
+                    d_min, d_max = row["data_min"], row["data_max"]
+                    periodo = d_min.strftime("%d/%m") if d_min == d_max else f"{d_min.strftime('%d/%m')} a {d_max.strftime('%d/%m')}"
+                    st.caption(f"📅 {periodo}")
+                    st.caption(f"{int(row['vendas'])} venda(s)")
+                    st.caption(f"R$ {row['faturamento']:,.2f}")
+                    if st.button("💾 Salvar", key=f"sc_salvar_{row['sku']}", use_container_width=True):
+                        if not nome_input.strip() or custo_input <= 0:
+                            st.session_state["validacao_resultado"] = {
+                                "ok": False, "msg": f"Preencha o nome e um custo maior que 0 pro SKU {row['sku']}."
+                            }
+                        else:
+                            try:
+                                n_venda = resolver_sku_sem_cadastro(client_bq, row["sku"], nome_input.strip(), custo_input)
+                                st.session_state["validacao_resultado"] = {
+                                    "ok": True,
+                                    "msg": f"SKU {row['sku']} cadastrado. {n_venda} venda(s) recalculada(s).",
+                                }
+                                st.cache_data.clear()
+                            except Exception as e:
+                                st.session_state["validacao_resultado"] = {"ok": False, "msg": f"Erro ao salvar {row['sku']}: {e}"}
+                        st.rerun()
+
+    st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
+    n_divergentes_com_venda = int((df_divergentes["vendas"] > 0).sum()) if not df_divergentes.empty else 0
+    total_skus_variantes = int(df_divergentes["skus"].apply(len).sum()) if not df_divergentes.empty else 0
+    st.markdown(
+        f'<h3>⚠️ Produtos com custo divergente ({len(df_divergentes)} — {total_skus_variantes} SKU(s) no total) '
+        f'— {n_divergentes_com_venda} com venda registrada</h3>',
+        unsafe_allow_html=True,
+    )
+    st.caption(
+        "Variantes do mesmo produto (cores/tamanhos, ex: CP-209-AZ e CP-209-RS) são agrupadas — "
+        "corrigir aplica o mesmo custo pra todas de uma vez, já que cor/tamanho não muda o que se paga pelo produto. "
+        "Ordenado com os que já têm venda primeiro."
+    )
+    if df_divergentes.empty:
+        st.success("Nenhuma divergência encontrada. 🎉")
+    else:
+        so_com_venda = st.checkbox("Mostrar só os que têm venda registrada", value=(n_divergentes_com_venda > 0))
+        df_div_exibir = df_divergentes[df_divergentes["vendas"] > 0] if so_com_venda else df_divergentes
+        for _, row in df_div_exibir.iterrows():
+            with st.container(border=True):
+                c1, c2, c3, c4 = st.columns([1.4, 2.6, 1.8, 1])
+                with c1:
+                    st.text_input(
+                        "SKU principal", value=row["sku_base"], disabled=True, key=f"dv_sku_{row['sku_base']}"
+                    )
+                    if len(row["skus"]) > 1:
+                        st.caption("Variantes: " + ", ".join(row["skus"]))
+                with c2:
+                    valores_fmt = " / ".join(f"R$ {float(v):,.2f}" for v in row["valores"])
+                    st.caption(row["produto"] or "")
+                    st.caption(f"Cadastrado hoje: {valores_fmt}")
+                    if row["vendas"] > 0:
+                        st.caption(f"🛒 {int(row['vendas'])} venda(s) registrada(s)")
+                    else:
+                        st.caption("Sem venda registrada ainda")
+                with c3:
+                    custo_correto = st.number_input(
+                        "Custo correto (R$)", min_value=0.0, step=0.01,
+                        value=float(row["valores"][0]), key=f"dv_custo_{row['sku_base']}"
+                    )
+                with c4:
+                    st.write("")
+                    if st.button("🛠️ Corrigir", key=f"dv_corrigir_{row['sku_base']}", use_container_width=True):
+                        try:
+                            n_venda = resolver_grupo_divergente(client_bq, row["skus"], custo_correto)
+                            skus_txt = ", ".join(row["skus"])
+                            st.session_state["validacao_resultado"] = {
+                                "ok": True,
+                                "msg": f"{skus_txt} corrigido(s) pra R$ {custo_correto:.2f}. {n_venda} venda(s) recalculada(s).",
+                            }
+                            st.cache_data.clear()
+                        except Exception as e:
+                            st.session_state["validacao_resultado"] = {"ok": False, "msg": f"Erro ao corrigir {row['sku_base']}: {e}"}
+                        st.rerun()
 
 # --- CAMPINEIRA ---
 elif st.session_state.pg == "Campineira":
@@ -1157,7 +1682,8 @@ elif st.session_state.pg == "Gestão de Estoque":
     table_id_viva = "leandro-marketplace.DL_Store_Online.tb_estoque"
     table_id_hist = "leandro-marketplace.DL_Store_Online.tb_estoque_historico"
     
-    with st.expander("📥 Registrar Entrada de Mercadoria", expanded=True):
+    with st.container(border=True):
+        st.markdown("**📥 Registrar Entrada de Mercadoria**")
         if not df_base_completa.empty:
             df_est = df_base_completa.copy()
             df_est['Custo_num'] = df_est['Custo_aquisicao'].apply(converter_custo_seguro)
