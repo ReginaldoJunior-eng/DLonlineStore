@@ -7,8 +7,7 @@ import json
 import os
 import io
 import base64
-import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 from google.cloud import bigquery
 from google.oauth2 import service_account
 import plotly.graph_objects as go
@@ -242,36 +241,6 @@ def buscar_produtos_bq():
         return client_bq.query(query).to_dataframe()
     return pd.DataFrame()
 
-def buscar_anotacoes_bq():
-    if client_bq:
-        try:
-            query = "SELECT * FROM `leandro-marketplace.DL_Store_Online.tb_anotacoes` ORDER BY data_criacao DESC"
-            return client_bq.query(query).to_dataframe()
-        except:
-            return pd.DataFrame()
-    return pd.DataFrame()
-
-def inserir_anotacao_bq(texto):
-    if client_bq:
-        texto_seguro = str(texto).replace("'", "''")
-        id_nota = str(uuid.uuid4())
-        query = f"""
-            INSERT INTO `leandro-marketplace.DL_Store_Online.tb_anotacoes` (id, anotacao, status_concluido, data_criacao)
-            VALUES ('{id_nota}', '{texto_seguro}', false, CURRENT_TIMESTAMP())
-        """
-        client_bq.query(query).result()
-
-def atualizar_status_bq(id_nota, status):
-    if client_bq:
-        st_sql = str(status).lower()
-        query = f"UPDATE `leandro-marketplace.DL_Store_Online.tb_anotacoes` SET status_concluido = {st_sql} WHERE id = '{id_nota}'"
-        client_bq.query(query).result()
-
-def excluir_anotacao_bq(id_nota):
-    if client_bq:
-        query = f"DELETE FROM `leandro-marketplace.DL_Store_Online.tb_anotacoes` WHERE id = '{id_nota}'"
-        client_bq.query(query).result()
-
 # --- INICIALIZAÇÃO DA BASE DE DADOS ---
 df_base_completa = pd.DataFrame()
 
@@ -332,10 +301,7 @@ with st.sidebar:
         st.markdown(f'<p style="color: #fbbf24; font-size: 14px; font-weight: 600; margin-bottom: 16px;">👋 Bem-vindo, Leandro</p>', unsafe_allow_html=True)
         
         st.markdown('<p style="color: #9ca3af; font-size: 12px; font-weight: 600; text-transform: uppercase; margin-bottom: 12px; margin-top: 20px;">Operações</p>', unsafe_allow_html=True)
-        if st.button("✅ Pendências"): 
-            st.session_state.pg = "Pendencias"
-            st.rerun()
-        if st.button("📊 Comparativo de Preços"): 
+        if st.button("📊 Comparativo de Preços"):
             st.session_state.pg = "Calculadora"
             st.rerun()
         if st.button("📝 Novo Item na Base"): 
@@ -360,61 +326,6 @@ with st.sidebar:
             st.session_state.pg = "Validar Vendas"
             st.rerun()
 
-        # --- BLOCO DE NOTAS ---
-        st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
-        st.markdown('<p style="color: #9ca3af; font-size: 12px; font-weight: 600; text-transform: uppercase; margin-bottom: 12px;">Produtividade</p>', unsafe_allow_html=True)
-        # Botão de alternância manual em vez de st.expander — o expander nativo do
-        # Streamlit usa um ícone (fonte "Material Symbols" carregada via CDN) pra
-        # seta de abrir/fechar; quando essa fonte não carrega no navegador (ex:
-        # bloqueada por extensões como o Brave Shields), aparece o nome do ícone
-        # como texto cru ("arrow_down") em cima do título. Usando ▼/▲ (caracteres
-        # Unicode comuns, não dependem de fonte externa) isso não acontece.
-        if "sidebar_notas_aberto" not in st.session_state:
-            st.session_state["sidebar_notas_aberto"] = False
-
-        seta_notas = "▲" if st.session_state["sidebar_notas_aberto"] else "▼"
-        if st.button(f"📋 Bloco de Notas & Pendências {seta_notas}", use_container_width=True, key="btn_toggle_notas"):
-            st.session_state["sidebar_notas_aberto"] = not st.session_state["sidebar_notas_aberto"]
-            st.rerun()
-
-        if st.session_state["sidebar_notas_aberto"]:
-            nova_nota_sb = st.text_input("Escreva uma nova nota:", key="input_nova_nota_sidebar", placeholder="Digite...")
-            if st.button("📌 Adicionar Nota", use_container_width=True):
-                if nova_nota_sb.strip() != "":
-                    try:
-                        inserir_anotacao_bq(nova_nota_sb)
-                        st.toast("Nota adicionada com sucesso! 📌")
-                        st.cache_data.clear()
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"Erro ao salvar: {e}")
-                else:
-                    st.warning("Digite algo antes de salvar.")
-
-            st.markdown('<p style="color: #9ca3af; font-size: 11px; margin: 12px 0 8px 0;">Pendências Ativas</p>', unsafe_allow_html=True)
-
-            try:
-                df_apoio = buscar_anotacoes_bq()
-                if not df_apoio.empty:
-                    df_ativas = df_apoio[df_apoio['status_concluido'] == False]
-
-                    if not df_ativas.empty:
-                        for idx, row in df_ativas.iterrows():
-                            if st.checkbox(row['anotacao'], key=f"sb_chk_{row['id']}"):
-                                try:
-                                    atualizar_status_bq(row['id'], True)
-                                    st.toast("Pendência concluída! 🎉")
-                                    st.cache_data.clear()
-                                    st.rerun()
-                                except Exception as e_up:
-                                    st.error(f"Erro ao atualizar: {e_up}")
-                    else:
-                        st.info("Nenhuma nota ativa.")
-                else:
-                    st.info("Nenhuma nota criada.")
-            except Exception as e:
-                st.caption(f"Erro ao conectar: {e}")
-        
         # --- LOGOUT ---
         st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
         if st.button("🚪 Sair", use_container_width=True):
@@ -899,43 +810,6 @@ elif st.session_state.pg == "Contato":
                 st.markdown(f'<a href="{mailto}" style="background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%); color: white; padding: 12px 20px; border-radius: 8px; text-decoration: none; font-weight: 600; display: inline-block; box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);">📧 Abrir E-mail</a>', unsafe_allow_html=True)
 
 # --- PÁGINA PENDÊNCIAS ---
-elif st.session_state.pg == "Pendencias":
-    st.markdown('<h1>📋 Pendências e Anotações</h1>', unsafe_allow_html=True)
-    st.markdown('<div class="section-header"></div>', unsafe_allow_html=True)
-    
-    with st.container(border=True):
-        col_input, col_btn = st.columns([3, 1])
-        with col_input:
-            nova_nota = st.text_input("O que precisa ser feito?", placeholder="Ex: atualizar estoque...", key="txt_gcp", label_visibility="collapsed")
-        with col_btn:
-            st.markdown('<div style="padding-top: 7px;"></div>', unsafe_allow_html=True)
-            if st.button("Adicionar", use_container_width=True, type="primary"):
-                if nova_nota:
-                    inserir_anotacao_bq(nova_nota)
-                    st.rerun()
-
-    st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
-    df_notas = buscar_anotacoes_bq()
-    if not df_notas.empty:
-        for index, row in df_notas.iterrows():
-            c_check, c_texto, c_del = st.columns([0.5, 8.5, 1])
-            with c_check:
-                check = st.checkbox(" ", value=row['status_concluido'], key=f"check_{row['id']}", label_visibility="collapsed")
-                if check != row['status_concluido']:
-                    atualizar_status_bq(row['id'], check)
-                    st.rerun()
-            with c_texto:
-                if row['status_concluido']: 
-                    st.markdown(f"<span style='text-decoration: line-through; color: #9ca3af;'>{row['anotacao']}</span>", unsafe_allow_html=True)
-                else: 
-                    st.write(row['anotacao'])
-            with c_del:
-                if st.button("❌", key=f"del_{row['id']}", help="Deletar"):
-                    excluir_anotacao_bq(row['id'])
-                    st.rerun()
-    else:
-        st.info("Nenhuma pendência no momento.")
-
 # --- PÁGINA CALCULADORA ---
 elif st.session_state.pg == "Calculadora":
     st.markdown('<h1>📊 Comparativo de Preços</h1>', unsafe_allow_html=True)

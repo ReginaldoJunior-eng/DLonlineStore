@@ -753,6 +753,21 @@ def processar_e_enviar_imagem(driver, imagem_url):
     except Exception as e:
         return f"erro ao processar imagem: {str(e)[:80]}"
 
+def _mensagem_erro_legivel(e):
+    """Selenium às vezes lança uma exceção com uma stacktrace NATIVA do
+    Chrome/chromedriver no lugar de uma mensagem normal (endereços de memória,
+    frames "<unknown>") — geralmente sinal de que a sessão do navegador travou
+    ou morreu no meio de uma ação (não é erro do nosso código). Em vez de
+    despejar esse texto técnico na tela, detecta o padrão e devolve algo que
+    a pessoa consegue entender e agir em cima."""
+    texto = str(e)
+    if 'stacktrace' in texto.lower() or 'invalid session id' in texto.lower() or 'session deleted' in texto.lower():
+        return "sessão do Chrome caiu/desconectou no meio da ação — desconecta e loga de novo no Upseller, depois tenta reprocessar"
+    primeira_linha = texto.split('\n')[0].strip()
+    if not primeira_linha or len(primeira_linha) < 3:
+        return "erro desconhecido do navegador (a sessão pode ter caído) — tente reprocessar"
+    return primeira_linha[:150]
+
 def publicar_produto_upseller(driver, produto, client=None):
     """
     Publica um produto no Upseller.
@@ -947,7 +962,7 @@ def publicar_produto_upseller(driver, produto, client=None):
         return True, f"✅ Produto '{nome}' publicado! SKU: {sku}.{aviso_imagem}", sku
 
     except Exception as e:
-        return False, f"❌ Erro: {str(e)[:100]}", sku
+        return False, f"❌ Erro: {_mensagem_erro_legivel(e)}", sku
 
 # ============================================================
 # CONFIRMAÇÃO: A AUTOMAÇÃO REALMENTE PAROU?
