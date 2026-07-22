@@ -948,6 +948,16 @@ def publicar_produto_upseller(driver, produto, client=None):
                 }
                 return null;
             """)
+            if erro_validacao and "product-add" not in driver.current_url:
+                # A URL mudou (saiu da tela de criar produto) — o produto foi
+                # criado de verdade, o texto "já existe" que apareceu é sobra de
+                # alguma notificação antiga ainda visível na tela, não um erro
+                # desse envio específico. Confirmado: RJ-00027 a RJ-00031 saíram
+                # "com erro" pra gente mas existem de verdade e ativos no
+                # Upseller — cada tentativa criava o produto mesmo reportando
+                # falha, e o retry consumia números à toa achando que precisava
+                # tentar de novo.
+                erro_validacao = None
             if not erro_validacao:
                 break
             # Só vale re-tentar se for colisão de SKU — colisão de EAN/código de
