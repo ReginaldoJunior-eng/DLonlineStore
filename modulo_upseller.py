@@ -956,7 +956,7 @@ def publicar_produto_upseller(driver, produto, client=None):
                 break
 
         if erro_validacao:
-            return False, f"❌ {erro_validacao}", sku
+            return False, f"❌ {erro_validacao} (SKU tentado: {sku})", sku
 
         aviso_imagem = "" if imagem_status == "imagem enviada" else f" ⚠️ Imagem: {imagem_status}."
         return True, f"✅ Produto '{nome}' publicado! SKU: {sku}.{aviso_imagem}", sku
