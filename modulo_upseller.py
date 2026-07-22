@@ -615,7 +615,11 @@ def titulo_case(texto):
 def extrair_dimensoes(tamanho_str):
     """Extrai comprimento, largura, altura de string como '25x17cm, 30x20cm'."""
     import re
-    if not tamanho_str:
+    # `not tamanho_str` não pega NaN (float do pandas pra campo NULL) — NaN é
+    # "truthy" em Python. Sem essa checagem de tipo, um produto sem tamanho
+    # cadastrado quebrava aqui com "expected string or bytes-like object, got
+    # 'float'" assim que a lista passou a vir do BigQuery (via pandas).
+    if not tamanho_str or not isinstance(tamanho_str, str):
         return None, None, None
     nums = re.findall(r'\d+', tamanho_str)
     if len(nums) >= 3:
@@ -629,7 +633,9 @@ def extrair_dimensoes(tamanho_str):
 def extrair_peso_gramas(peso_str):
     """Extrai peso em gramas e adiciona 50g de embalagem."""
     import re
-    if not peso_str:
+    # Mesmo caso de extrair_dimensoes: NaN (pandas/BigQuery) é truthy, `not
+    # peso_str` sozinho não pega.
+    if not peso_str or not isinstance(peso_str, str):
         return None
     nums = re.findall(r'\d+', peso_str)
     if nums:

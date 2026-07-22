@@ -96,6 +96,16 @@ def ler_status() -> dict:
     with open(ARQUIVO_STATUS, encoding="utf-8") as f:
         return json.load(f)
 
+def _sem_nan(valor):
+    """Converte NaN do pandas (é assim que to_dataframe() representa um NULL
+    de uma coluna STRING) em None de verdade. NaN é "truthy" em Python
+    (bool(nan) é True), então um `if not campo:` não pega esse caso — o valor
+    NaN (float) vazava pra frente e quebrava funções que esperam string, tipo
+    extrair_dimensoes/extrair_peso_gramas em modulo_upseller.py ("expected
+    string or bytes-like object, got 'float'"). `valor != valor` só é True
+    quando valor é NaN — funciona sem precisar checar tipo ou importar pandas."""
+    return None if valor != valor else valor
+
 def ler_resultados(client=None) -> list:
     """Lê o resultado da varredura mais recente. Prioriza o BigQuery
     (tb_resultado_produtos_campineira) — essa tabela já recebe cada produto em
@@ -114,24 +124,24 @@ def ler_resultados(client=None) -> list:
                 produtos = []
                 for _, row in df.iterrows():
                     produtos.append({
-                        "id": row.get("id_produto"),
-                        "nome": row.get("nome"),
-                        "categoria": row.get("categoria"),
+                        "id": _sem_nan(row.get("id_produto")),
+                        "nome": _sem_nan(row.get("nome")),
+                        "categoria": _sem_nan(row.get("categoria")),
                         "estoque": row.get("estoque"),
-                        "preco": row.get("custo_campineira"),
-                        "ean": row.get("ean"),
-                        "fabricante": row.get("fabricante"),
-                        "caixa_com": row.get("caixa_com"),
-                        "quantidade": row.get("quantidade"),
-                        "cores": row.get("cor_cores"),
-                        "composicao": row.get("composicao"),
-                        "validade": row.get("validade"),
-                        "tamanho": row.get("tamanho"),
-                        "peso": row.get("peso"),
-                        "tipo": row.get("tipo"),
-                        "caixa_master": row.get("caixa_master"),
-                        "link": row.get("link"),
-                        "imagem": row.get("imagem"),
+                        "preco": _sem_nan(row.get("custo_campineira")),
+                        "ean": _sem_nan(row.get("ean")),
+                        "fabricante": _sem_nan(row.get("fabricante")),
+                        "caixa_com": _sem_nan(row.get("caixa_com")),
+                        "quantidade": _sem_nan(row.get("quantidade")),
+                        "cores": _sem_nan(row.get("cor_cores")),
+                        "composicao": _sem_nan(row.get("composicao")),
+                        "validade": _sem_nan(row.get("validade")),
+                        "tamanho": _sem_nan(row.get("tamanho")),
+                        "peso": _sem_nan(row.get("peso")),
+                        "tipo": _sem_nan(row.get("tipo")),
+                        "caixa_master": _sem_nan(row.get("caixa_master")),
+                        "link": _sem_nan(row.get("link")),
+                        "imagem": _sem_nan(row.get("imagem")),
                     })
                 return produtos
         except Exception:
@@ -536,21 +546,21 @@ def listar_produtos_armazem_com_erro(client):
                     cap = df2.iloc[0].to_dict()
                     produto_completo = {
                         "id": r["id_produto"],
-                        "nome": cap.get("nome") or r["nome"],
-                        "categoria": cap.get("categoria") or r["categoria"],
-                        "ean": cap.get("ean"),
-                        "fabricante": cap.get("fabricante"),
-                        "caixa_com": cap.get("caixa_com"),
-                        "quantidade": cap.get("quantidade"),
-                        "cores": cap.get("cor_cores"),
-                        "composicao": cap.get("composicao"),
-                        "validade": cap.get("validade"),
-                        "tamanho": cap.get("tamanho"),
-                        "peso": cap.get("peso"),
-                        "tipo": cap.get("tipo"),
-                        "caixa_master": cap.get("caixa_master"),
-                        "link": cap.get("link"),
-                        "imagem": cap.get("imagem"),
+                        "nome": _sem_nan(cap.get("nome")) or r["nome"],
+                        "categoria": _sem_nan(cap.get("categoria")) or r["categoria"],
+                        "ean": _sem_nan(cap.get("ean")),
+                        "fabricante": _sem_nan(cap.get("fabricante")),
+                        "caixa_com": _sem_nan(cap.get("caixa_com")),
+                        "quantidade": _sem_nan(cap.get("quantidade")),
+                        "cores": _sem_nan(cap.get("cor_cores")),
+                        "composicao": _sem_nan(cap.get("composicao")),
+                        "validade": _sem_nan(cap.get("validade")),
+                        "tamanho": _sem_nan(cap.get("tamanho")),
+                        "peso": _sem_nan(cap.get("peso")),
+                        "tipo": _sem_nan(cap.get("tipo")),
+                        "caixa_master": _sem_nan(cap.get("caixa_master")),
+                        "link": _sem_nan(cap.get("link")),
+                        "imagem": _sem_nan(cap.get("imagem")),
                     }
             except Exception:
                 pass
