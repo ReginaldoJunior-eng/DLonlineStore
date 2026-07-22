@@ -1459,7 +1459,10 @@ def pagina_campineira(client_bq=None):
     # guardada no estado da sessão, não na renderização do widget. Bônus: só o
     # conteúdo da aba ativa roda/renderiza (st.tabs() rodava as 5 sempre, mesmo
     # as invisíveis) — telas mais rápidas, principalmente Publicar e Histórico.
-    ABAS_CAMPINEIRA = ["⚙️ Configurar e Rodar", "📦 Resultados", "🖼️ Galeria", "🚀 Publicar", "🗂️ Histórico"]
+    # "🖼️ Galeria" retirada por enquanto (a pedido) — o código da página continua
+    # logo abaixo, só não está na lista de abas, então é só adicionar de volta
+    # aqui se precisar reativar.
+    ABAS_CAMPINEIRA = ["⚙️ Configurar e Rodar", "📦 Resultados", "🚀 Publicar", "🗂️ Histórico"]
     if "campineira_aba_ativa" not in st.session_state:
         st.session_state["campineira_aba_ativa"] = ABAS_CAMPINEIRA[0]
 
@@ -2140,6 +2143,11 @@ def pagina_campineira(client_bq=None):
 
                 st.caption(f"**{len(df_view)}** produto(s) — ordenado pela leitura mais recente")
 
+                # Preço sugerido por plataforma, calculado do custo (mesma
+                # margem/regra usada em Resultados e Galeria — calcular_precos_sugeridos).
+                precos_sugeridos = df_view["preco"].apply(calcular_precos_sugeridos).apply(pd.Series)
+                df_view = pd.concat([df_view.reset_index(drop=True), precos_sugeridos.reset_index(drop=True)], axis=1)
+
                 df_show_hist = df_view.rename(columns={
                     "nome": "Nome",
                     "categoria": "Categoria",
@@ -2150,9 +2158,14 @@ def pagina_campineira(client_bq=None):
                     "data_primeira_leitura": "1ª Leitura",
                     "data_ultima_leitura": "Última Leitura",
                     "data_ultima_atualizacao": "Última Atualização",
+                    "preco_shein": "Shein",
+                    "preco_shopee": "Shopee",
+                    "preco_temu": "Temu",
+                    "preco_tiktok": "TikTok",
                 })
                 colunas_exibir = [
-                    "Foto", "Nome", "Categoria", "Estoque", "Custo", "SKU",
+                    "Foto", "Nome", "Categoria", "Estoque", "Custo",
+                    "Shein", "Shopee", "Temu", "TikTok", "SKU",
                     "1ª Leitura", "Última Leitura", "Última Atualização",
                 ]
                 st.dataframe(
@@ -2161,5 +2174,9 @@ def pagina_campineira(client_bq=None):
                     column_config={
                         "Foto": st.column_config.ImageColumn("Foto", width="small"),
                         "SKU": st.column_config.TextColumn("SKU"),
+                        "Shein": st.column_config.NumberColumn("Shein", format="R$ %.2f"),
+                        "Shopee": st.column_config.NumberColumn("Shopee", format="R$ %.2f"),
+                        "Temu": st.column_config.NumberColumn("Temu", format="R$ %.2f"),
+                        "TikTok": st.column_config.NumberColumn("TikTok", format="R$ %.2f"),
                     }
                 )
