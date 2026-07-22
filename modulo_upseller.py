@@ -898,9 +898,13 @@ def publicar_produto_upseller(driver, produto, client=None):
             if tentativa > 0:
                 sku_num += 1
                 sku = f"RJ-{sku_num:05d}"
-                campo_sku = driver.find_element(By.CSS_SELECTOR,
+                # wait.until (não find_element cru) — a tela pode ainda estar se
+                # ajustando logo depois do erro da tentativa anterior, e
+                # find_element sem espera nenhuma quebra na hora com "no such
+                # element" se o campo não estiver presente nesse exato instante.
+                campo_sku = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR,
                     "#basic > div.ant-card-body > div > form > div:nth-child(1) > div.ant-col.ant-col-15.ant-form-item-control-wrapper > div > span > input"
-                )
+                )))
                 campo_sku.clear()
                 campo_sku.send_keys(sku)
 

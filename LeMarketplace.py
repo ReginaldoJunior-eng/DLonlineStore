@@ -344,10 +344,7 @@ with st.sidebar:
         if st.button("💰 Alterar Preços"): 
             st.session_state.pg = "Alterar Preco"
             st.rerun()
-        if st.button("📈 Análise de Vendas"): 
-            st.session_state.pg = "Análise de Vendas"
-            st.rerun()
-        if st.button("📦 Gestão de Estoque"): 
+        if st.button("📦 Gestão de Estoque"):
             st.session_state.pg = "Gestão de Estoque"
             st.rerun()
         if st.button("🏭 Campineira"):
@@ -997,42 +994,6 @@ elif st.session_state.pg == "Calculadora":
         st.info("Nenhum produto cadastrado ainda.")
 
 # --- PÁGINA ANÁLISE DE VENDAS ---
-elif st.session_state.pg == "Análise de Vendas":
-    st.markdown('<h1>📈 Análise de Vendas</h1>', unsafe_allow_html=True)
-    st.markdown('<div class="section-header"></div>', unsafe_allow_html=True)
-    
-    if not df_base_completa.empty:
-        df_rel = df_base_completa.copy()
-        df_rel['Custo_num'] = df_rel['Custo_aquisicao'].apply(converter_custo_seguro)
-        
-        st.markdown('<h3>🏆 Inteligência de Mercado (Melhor Margem)</h3>', unsafe_allow_html=True)
-        m_alvo = st.slider("Margem para Análise (%)", 1.0, 50.0, 2.0)
-        rank_data = []
-        for _, r in df_rel.iterrows():
-            _, l1 = calcular_venda_completo(r['Custo_num'], m_alvo, "shein")
-            _, l2 = calcular_venda_completo(r['Custo_num'], m_alvo, "shopee")
-            _, l3 = calcular_venda_completo(r['Custo_num'], m_alvo, "temu")
-            _, l4 = calcular_venda_completo(r['Custo_num'], m_alvo, "tiktok")
-            max_l = max(l1, l2, l3, l4)
-            rank_data.append({"Produto": r['Produto'], "SKU": r['SKU'], "Lucro Estimado": round(max_l, 2)})
-        
-        df_rank = pd.DataFrame(rank_data).sort_values(by="Lucro Estimado", ascending=False)
-        st.dataframe(df_rank, use_container_width=True, hide_index=True)
-        
-        buffer = io.BytesIO()
-        with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
-            df_rank.to_excel(writer, index=False, sheet_name='Ranking_Lucro')
-            writer.close()
-        
-        st.download_button(
-            label="📥 Exportar Ranking (xlsx)",
-            data=buffer.getvalue(),
-            file_name="ranking_lucro_dl_store.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
-    else:
-        st.info("Nenhum produto cadastrado ainda.")
-
 # --- PÁGINA CADASTRO ---
 elif st.session_state.pg == "Cadastro":
     st.markdown('<h1>📝 Novo Item na Base</h1>', unsafe_allow_html=True)
