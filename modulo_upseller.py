@@ -885,31 +885,57 @@ def publicar_produto_upseller(driver, produto, client=None):
         imagem_status = processar_e_enviar_imagem(driver, produto.get("imagem", ""))
 
         # ── SALVAR ─────────────────────────────────────────────
-        driver.execute_script("window.scrollTo(0, 0);")
-        time.sleep(1)
-        btn_salvar = wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR,
-            "#myEditBox > section.my_edit_head.ant-layout > div > div.head_r > div > button"
-        )))
-        btn_salvar.click()
-        time.sleep(3)
+        # tb_sku_registrados pode ter buracos (SKU criado de verdade no Upseller
+        # em algum teste antigo, sem ficar registrado aqui — já aconteceu) — então
+        # o próximo número "calculado" pode colidir mesmo estando certo pela nossa
+        # conta. Em vez de desistir na primeira colisão de SKU (não de EAN/GTIN,
+        # que reincidir não resolve), tenta de novo com o número seguinte, até
+        # 5 vezes, só reenviando o campo de SKU e clicando Salvar de novo.
+        erro_validacao = None
+        MAX_TENTATIVAS_SKU = 5
+        sku_num = int(sku.split('-')[1])
+        for tentativa in range(MAX_TENTATIVAS_SKU):
+            if tentativa > 0:
+                sku_num += 1
+                sku = f"RJ-{sku_num:05d}"
+                campo_sku = driver.find_element(By.CSS_SELECTOR,
+                    "#basic > div.ant-card-body > div > form > div:nth-child(1) > div.ant-col.ant-col-15.ant-form-item-control-wrapper > div > span > input"
+                )
+                campo_sku.clear()
+                campo_sku.send_keys(sku)
 
-        # Antes de reportar sucesso, checa se o Upseller recusou o salvamento (ex:
-        # "Erro: 7899866278400 O código de barra já existe") — sem isso, o código
-        # clicava Salvar, esperava 3s e SEMPRE retornava sucesso, mesmo quando o
-        # produto não foi criado de verdade por causa de EAN/GTIN duplicado.
-        erro_validacao = driver.execute_script("""
-            var candidatos = document.querySelectorAll(
-                '.ant-message-error, .ant-message-notice-content, .ant-notification-notice-description, ' +
-                '.ant-form-item-explain, .ant-form-explain, [class*="error"]'
-            );
-            for (var el of candidatos) {
-                var txt = (el.textContent || '').trim();
-                if (txt && txt.toLowerCase().includes('já existe') && el.offsetParent !== null) {
-                    return txt;
+            driver.execute_script("window.scrollTo(0, 0);")
+            time.sleep(1)
+            btn_salvar = wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR,
+                "#myEditBox > section.my_edit_head.ant-layout > div > div.head_r > div > button"
+            )))
+            btn_salvar.click()
+            time.sleep(3)
+
+            # Antes de reportar sucesso, checa se o Upseller recusou o salvamento
+            # (ex: "Erro: 7899866278400 O código de barra já existe") — sem isso,
+            # o código clicava Salvar, esperava 3s e SEMPRE retornava sucesso,
+            # mesmo quando o produto não foi criado de verdade.
+            erro_validacao = driver.execute_script("""
+                var candidatos = document.querySelectorAll(
+                    '.ant-message-error, .ant-message-notice-content, .ant-notification-notice-description, ' +
+                    '.ant-form-item-explain, .ant-form-explain, [class*="error"]'
+                );
+                for (var el of candidatos) {
+                    var txt = (el.textContent || '').trim();
+                    if (txt && txt.toLowerCase().includes('já existe') && el.offsetParent !== null) {
+                        return txt;
+                    }
                 }
-            }
-            return null;
-        """)
+                return null;
+            """)
+            if not erro_validacao:
+                break
+            # Só vale re-tentar se for colisão de SKU — colisão de EAN/código de
+            # barra não some trocando o SKU, é o mesmo produto de novo.
+            if 'sku' not in erro_validacao.lower():
+                break
+
         if erro_validacao:
             return False, f"❌ {erro_validacao}", sku
 
@@ -2658,7 +2684,7 @@ def verificar_campos_obrigatorios(driver):
 # EXPORTAR PEDIDOS ENVIADOS (pra alimentar o Dashboard Financeiro)
 # ============================================================
 
-def exportar_pedidos_shipped_upseller(driver, pasta_download):
+def exportar_pedidos_shipped_upseller(driver, pasta_download, data_inicio_custom=None, data_fim_custom=None):
     """Automatiza a exportação de TODOS os pedidos de 'Pedidos > Enviado' do
     Upseller pra Excel: Exportar > Exportar Todos os Pedidos > mantém os 3
     checkboxes (Informação do Produto/Pedido, SKU Armazém) marcados > Exportar >
@@ -2670,6 +2696,20 @@ def exportar_pedidos_shipped_upseller(driver, pasta_download):
     aqui dentro, em vez de depender de ter sido criado com criar_driver(pasta_download=...)
     (que só configura no momento da criação, e o driver desse app geralmente já
     existe de um login anterior).
+
+    data_inicio_custom / data_fim_custom (datetime.date, opcional): substitui o
+    período padrão (1º dia do mês anterior até o último dia do mês atual) por um
+    intervalo customizado — usado pra reimportar um histórico mais antigo (ex:
+    voltar até 01/01). IMPORTANTE: os dois painéis do calendário são ligados e
+    SEMPRE mostram meses adjacentes (esquerda = mês N, direita = mês N+1) — só
+    dá pra selecionar um intervalo dentro do mesmo mês ou de dois meses
+    seguidos. Pra cobrir um ano inteiro, chame essa função VÁRIAS VEZES com
+    janelas de 2 meses adjacentes (jan-fev, mar-abr, ...) em vez de uma vez só
+    com o ano inteiro — ver importar_historico_completo_upseller() em
+    LeMarketplace.py, que já faz esse loop. Se data_inicio_custom pedir um mês
+    mais antigo que o padrão (mês anterior ao atual), navega o painel esquerdo
+    pra trás um número EXATO de vezes, calculado por matemática de data (não
+    "tenta até achar" — foi assim que uma tentativa antiga desandou).
 
     Retorna (sucesso: bool, caminho_do_arquivo_ou_mensagem_de_erro: str).
     """
@@ -2721,6 +2761,10 @@ def exportar_pedidos_shipped_upseller(driver, pasta_download):
         mes_anterior_fim = primeiro_mes_atual - _dt.timedelta(days=1)
         primeiro_mes_anterior = mes_anterior_fim.replace(day=1)
         data_inicio, data_fim = primeiro_mes_anterior, ultimo_mes_atual
+        if data_inicio_custom is not None:
+            data_inicio = data_inicio_custom
+        if data_fim_custom is not None:
+            data_fim = data_fim_custom
 
         # Abre o dropdown que hoje mostra "Hora de Envio"
         driver.execute_script("""
@@ -2755,6 +2799,34 @@ def exportar_pedidos_shipped_upseller(driver, pasta_download):
             return false;
         """)
         time.sleep(1)
+
+        # Os dois painéis do calendário são ligados (esquerda = mês N, direita =
+        # mês N+1, sempre adjacentes) — por padrão mostram mês anterior + mês
+        # atual. Se data_inicio pedir um mês mais antigo que isso (backfill de
+        # histórico), navega o painel esquerdo pra trás um número EXATO de vezes
+        # (calculado por matemática de data, não "tenta até achar" — foi assim
+        # que uma tentativa antiga desandou e "foi parar em dezembro" sem querer).
+        # Clique real do Selenium (mousedown/mouseup de verdade), não só JS —
+        # mesmo motivo do botão Exportar: o listener do Vue pode não disparar
+        # só com .click() sintético.
+        meses_navegar_atras = (primeiro_mes_anterior.year - data_inicio.year) * 12 + (primeiro_mes_anterior.month - data_inicio.month)
+        if meses_navegar_atras > 0:
+            from selenium.webdriver.common.action_chains import ActionChains
+            MAX_NAVEGACAO = 36  # 3 anos — teto de segurança, nunca passa disso
+            cliques = min(meses_navegar_atras, MAX_NAVEGACAO)
+            for _ in range(cliques):
+                try:
+                    seta_prev = None
+                    for el in driver.find_elements(By.CSS_SELECTOR, "a.ant-calendar-prev-month-btn"):
+                        if el.is_displayed():
+                            seta_prev = el
+                            break
+                    if not seta_prev:
+                        break
+                    ActionChains(driver).move_to_element(seta_prev).pause(0.1).click().perform()
+                    time.sleep(0.4)
+                except Exception:
+                    break
 
         def _clicar_dia_sem_navegar(dia_numero, indice_painel):
             """indice_painel: 0 = calendário da esquerda (mês anterior), 1 = da

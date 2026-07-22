@@ -92,9 +92,14 @@ def calcular_lucro_realizado(preco_venda, custo_aquisicao, mkt):
     venda de verdade — diferente de calcular_venda_completo (que resolve pra um
     preço-alvo dada uma margem desejada), aqui o preço já é conhecido (veio de um
     pedido de verdade, ex: importado do Upseller) e só precisamos descontar as
-    mesmas taxas/comissões de cada plataforma. Retorna o lucro em R$."""
+    mesmas taxas/comissões de cada plataforma. Retorna o lucro em R$.
+
+    Sem custo de embalagem aqui (diferente de calcular_venda_completo, que
+    ainda usa R$1 de embalagem pra SUGERIR preço) — conferido linha a linha
+    contra uma tabela calculada à mão pelo usuário em 21/07/2026 pro dia
+    17/07: a diferença era exatamente R$1,00 a menos em toda venda, e a
+    referência manual não descontava embalagem."""
     imposto_tax = 0.06
-    custo_embalagem = 1.00
     mkt = (mkt or "").lower()
     if mkt == "shein":
         comissao, taxa_fixa = 0.18, 5.0
@@ -109,4 +114,4 @@ def calcular_lucro_realizado(preco_venda, custo_aquisicao, mkt):
         # Temu (e qualquer plataforma não mapeada): sem comissão própria, só imposto.
         comissao, taxa_fixa = 0.0, 0.0
     custo_aquisicao = custo_aquisicao or 0
-    return preco_venda - (preco_venda * comissao) - (preco_venda * imposto_tax) - custo_aquisicao - custo_embalagem - taxa_fixa
+    return preco_venda - (preco_venda * comissao) - (preco_venda * imposto_tax) - custo_aquisicao - taxa_fixa

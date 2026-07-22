@@ -548,6 +548,11 @@ def listar_produtos_armazem_com_erro(client):
                         "id": r["id_produto"],
                         "nome": _sem_nan(cap.get("nome")) or r["nome"],
                         "categoria": _sem_nan(cap.get("categoria")) or r["categoria"],
+                        # Faltava isso — sem "preco"/"preco_num", registrar_produto_em_tb_produtos()
+                        # recebia None e gravava custo_aquisicao = 0 no reprocessamento
+                        # (causa real do RJ-00023 e de outros 106 produtos zerados em tb_produtos).
+                        "preco": _sem_nan(cap.get("custo_campineira")),
+                        "preco_num": _sem_nan(cap.get("custo_campineira_num")),
                         "ean": _sem_nan(cap.get("ean")),
                         "fabricante": _sem_nan(cap.get("fabricante")),
                         "caixa_com": _sem_nan(cap.get("caixa_com")),
@@ -1933,6 +1938,12 @@ def pagina_campineira(client_bq=None):
             validados_com_imagem = [p for p in validados if imagem_parece_valida(p.get('imagem'))]
             validados_sem_imagem = [p for p in validados if not imagem_parece_valida(p.get('imagem'))]
 
+            # Some da lista quem já foi publicado com sucesso NESSA sessão — sem
+            # isso a tela ficava poluída com cards "publicado" acumulando (o
+            # produto publicado já aparece certinho na aba Histórico, não precisa
+            # continuar ocupando espaço aqui). Quem falhou continua na lista.
+            validados_com_imagem = [p for p in validados_com_imagem if not st.session_state.get(f"pub_{p.get('id')}")]
+
             def _renderizar_card_pendente(p, idx, permitir_publicar):
                 with st.container(border=True):
                     col_img, col_info, col_btn = st.columns([0.7, 4.3, 1.5])
@@ -1970,10 +1981,7 @@ def pagina_campineira(client_bq=None):
                             st.checkbox("Selecionar", key=f"sel_pub_{p.get('id')}", label_visibility="visible")
                         else:
                             st.markdown("<div style='padding-top:20px'></div>", unsafe_allow_html=True)
-                        if publicado:
-                            msg = st.session_state.get(f"pub_msg_{p.get('id')}", "✅ Publicado!")
-                            st.success(msg)
-                        elif not permitir_publicar:
+                        if not permitir_publicar:
                             st.button("🔒 Publicar", key=f"btn_pub_dis_img_{idx}", disabled=True,
                                       use_container_width=True, help="Corrija a imagem antes de publicar")
                         elif st.session_state.get("ups_logado"):
@@ -1986,7 +1994,12 @@ def pagina_campineira(client_bq=None):
                                 st.error(f"⛔ {erro_anterior}")
                             if st.button("🚀 Publicar", key=f"btn_pub_{idx}", use_container_width=True, type="primary"):
                                 with st.spinner("Publicando..."):
-                                    _publicar_um_produto_armazem(p, client_bq_pipeline)
+                                    sucesso_pub, msg_pub = _publicar_um_produto_armazem(p, client_bq_pipeline)
+                                # Sucesso: sai da lista sozinho no rerun (já filtrado acima)
+                                # e o aviso vira um toast — sem card "publicado" acumulando
+                                # aqui, já que o produto vai aparecer certinho no Histórico.
+                                if sucesso_pub:
+                                    st.toast(msg_pub, icon="✅")
                                 st.rerun()
                         else:
                             st.button("🔒 Publicar", key=f"btn_pub_dis_{idx}", disabled=True,
@@ -2022,6 +2035,12 @@ def pagina_campineira(client_bq=None):
                     salvar_excluidos(set(), client_bq_pipeline)
                     st.rerun()
 
+            # Resultado da ÚLTIMA publicação em massa, de forma persistente — o
+            # log ao vivo (linhas_log) some no rerun do final do laço, senão.
+            resumo_massa = st.session_state.pop("pub_massa_resumo", None)
+            if resumo_massa:
+                st.success(f"✅ {resumo_massa['ok']} publicado(s) com sucesso, {resumo_massa['erro']} com erro.")
+
             # Publicação em massa — marca "Selecionar" em vários cards e publica
             # todos de uma vez, um atrás do outro (mesma função do botão individual).
             selecionados = [
@@ -2035,14 +2054,18 @@ def pagina_campineira(client_bq=None):
                     progresso = st.progress(0.0)
                     log_massa = st.empty()
                     linhas_log = []
+                    n_ok, n_erro = 0, 0
                     for i, p in enumerate(selecionados):
                         linhas_log.append(f"→ Publicando {p.get('nome', '')[:60]}...")
                         log_massa.markdown("  \n".join(linhas_log[-8:]))
                         sucesso, msg = _publicar_um_produto_armazem(p, client_bq_pipeline)
+                        n_ok += 1 if sucesso else 0
+                        n_erro += 0 if sucesso else 1
                         linhas_log[-1] = f"{'✅' if sucesso else '❌'} {p.get('nome', '')[:60]} — {msg[:100]}"
                         log_massa.markdown("  \n".join(linhas_log[-8:]))
                         st.session_state[f"sel_pub_{p.get('id')}"] = False
                         progresso.progress((i + 1) / len(selecionados))
+                    st.session_state["pub_massa_resumo"] = {"ok": n_ok, "erro": n_erro}
                     st.rerun()
 
             for idx, p in enumerate(validados_com_imagem):

@@ -473,6 +473,11 @@ def importar_pedidos_upseller_para_dashboard(client_bq, caminho_excel):
     col_sku_armazem = achar_coluna(["SKU (Armazém)", "SKU (Armazem)"], ("sku", "armaz"))
     col_sku_plain = achar_coluna(["SKU"], ("sku",))
     col_valor = achar_coluna(["Valor do Pedido"], ("valor", "pedido"))
+    # Temu: "Valor do Pedido" vem com algo a mais embutido (não é só o produto,
+    # provavelmente frete/logística cross-border) — pra essa plataforma usamos
+    # "Valor Total de Produtos" em vez disso. As outras plataformas continuam
+    # com "Valor do Pedido" normalmente.
+    col_valor_produtos_temu = achar_coluna(["Valor Total de Produtos"], ("valor", "total", "produtos"))
     col_qtd = achar_coluna(["Qtd. do Produto", "Qtd do Produto", "Quantidade de Produtos"], ("qtd", "produto"))
     # Mesma lógica pro nome: "Nome do Produto" também costuma vir vazia — cai
     # pra "Nome do Anúncio" (nome usado no anúncio da plataforma).
@@ -530,21 +535,28 @@ def importar_pedidos_upseller_para_dashboard(client_bq, caminho_excel):
                 duplicadas += 1
                 continue
 
+            plataforma = _normalizar_plataforma(row[col_plataforma])
+
+            # Temu usa "Valor Total de Produtos" em vez de "Valor do Pedido"
+            # ("Valor do Pedido" vem com algo a mais embutido nessa plataforma,
+            # não é só o produto) — as outras plataformas seguem com "Valor do
+            # Pedido" normalmente.
+            col_valor_usar = col_valor_produtos_temu if (plataforma == "temu" and col_valor_produtos_temu is not None) else col_valor
+
             # Pedido com várias linhas de produto costuma repetir o Nº de Pedido e
-            # só preencher "Valor do Pedido" na linha principal — as outras vêm
+            # só preencher o valor na linha principal — as outras vêm
             # zeradas/vazias pra não contar o valor do pedido mais de uma vez.
             # Ignora essas linhas "extras" (não é erro, só não é a linha certa).
-            if pd.isna(row[col_valor]) or float(row[col_valor]) == 0:
+            if pd.isna(row[col_valor_usar]) or float(row[col_valor_usar]) == 0:
                 continue
 
             data_pagamento = pd.to_datetime(row[col_pagamento]).date()
-            plataforma = _normalizar_plataforma(row[col_plataforma])
 
             sku_armazem = str(row[col_sku_armazem]).strip() if col_sku_armazem and pd.notna(row[col_sku_armazem]) else ""
             sku_plain = str(row[col_sku_plain]).strip() if col_sku_plain and pd.notna(row[col_sku_plain]) else ""
             sku = sku_armazem or sku_plain
 
-            valor_pedido = float(row[col_valor])
+            valor_pedido = float(row[col_valor_usar])
             quantidade = int(row[col_qtd]) if col_qtd and pd.notna(row[col_qtd]) else 1
 
             nome_prod_val = str(row[col_nome_produto]).strip() if col_nome_produto and pd.notna(row[col_nome_produto]) else ""
@@ -1300,6 +1312,41 @@ elif st.session_state.pg == "Dashboard":
                         for m in resultado_ant.get("msgs_erro", [])[:10]:
                             st.caption(f"- {m}")
 
+            # Upload manual do Excel — mais simples e sem risco pra importar
+            # histórico mais antigo: você exporta na mão no site (escolher datas
+            # antigas é fácil pra pessoa, arriscado pro robô navegar o calendário
+            # sozinho) e só sobe o arquivo aqui. Usa a mesma função de importação
+            # de sempre, não precisa estar logado nem abrir o Chrome.
+            with st.expander("📤 Já tenho o Excel exportado (upload manual)"):
+                st.caption(
+                    "Exportou o Excel direto no site do Upseller (Pedidos > Enviado)? Sobe o "
+                    "arquivo aqui — funciona pra qualquer período, inclusive histórico antigo, "
+                    "sem precisar automatizar o calendário. Pedidos já importados são ignorados."
+                )
+                arquivo_excel_manual = st.file_uploader(
+                    "Arquivo Excel do Upseller", type=["xlsx", "xls"], key="upload_excel_manual"
+                )
+                if arquivo_excel_manual is not None:
+                    if st.button("📥 Importar deste arquivo", key="btn_importar_excel_manual"):
+                        import tempfile
+                        caminho_tmp = os.path.join(
+                            tempfile.gettempdir(), f"upseller_manual_{arquivo_excel_manual.name}"
+                        )
+                        with open(caminho_tmp, "wb") as f_tmp:
+                            f_tmp.write(arquivo_excel_manual.getbuffer())
+                        with st.spinner("Processando planilha e registrando vendas novas..."):
+                            inseridas, duplicadas, erros, msgs_erro = importar_pedidos_upseller_para_dashboard(client_bq, caminho_tmp)
+                        st.session_state["dash_import_resultado"] = {
+                            "ok": True, "inseridas": inseridas, "duplicadas": duplicadas,
+                            "erros": erros, "msgs_erro": msgs_erro,
+                        }
+                        try:
+                            os.remove(caminho_tmp)
+                        except Exception:
+                            pass
+                        st.cache_data.clear()
+                        st.rerun()
+
             if st.session_state.get("ups_logado"):
                 if st.button("📊 Buscar Pedidos Enviados do Upseller", type="primary", use_container_width=True, key="btn_buscar_pedidos_topo"):
                     import tempfile
@@ -1323,6 +1370,68 @@ elif st.session_state.pg == "Dashboard":
                         st.cache_data.clear()
                     st.rerun()
 
+                # Histórico completo do ano — o calendário só seleciona 2 meses
+                # ADJACENTES por vez (ver exportar_pedidos_shipped_upseller), então
+                # pra cobrir o ano inteiro isso roda a exportação várias vezes, uma
+                # por par de meses (jan-fev, mar-abr, ...), até o mês atual.
+                with st.expander("📆 Importar histórico mais antigo (ano inteiro)"):
+                    st.caption(
+                        "Roda a exportação várias vezes, 2 meses por vez (jan-fev, mar-abr, ...), "
+                        "até o mês atual. Pode demorar — é basicamente rodar o botão de cima várias vezes."
+                    )
+                    ano_hist = st.number_input("Ano", min_value=2020, max_value=datetime.utcnow().year,
+                                                value=datetime.utcnow().year, step=1, key="input_ano_historico")
+                    if st.button("🚀 Importar ano inteiro", key="btn_importar_ano"):
+                        import tempfile, calendar as _calendar_mod
+                        pasta_download = os.path.join(tempfile.gettempdir(), "upseller_exports")
+                        driver = st.session_state.get("ups_driver")
+                        hoje_hist = (datetime.utcnow() - timedelta(hours=3)).date()
+
+                        janelas = []
+                        mes_j = 1
+                        while mes_j <= 12:
+                            d_ini = date(int(ano_hist), mes_j, 1)
+                            if d_ini > hoje_hist:
+                                break
+                            mes_fim_j = min(mes_j + 1, 12)
+                            ultimo_dia_j = _calendar_mod.monthrange(int(ano_hist), mes_fim_j)[1]
+                            d_fim = date(int(ano_hist), mes_fim_j, ultimo_dia_j)
+                            janelas.append((d_ini, d_fim))
+                            mes_j += 2
+
+                        progresso_hist = st.progress(0.0)
+                        log_hist = st.empty()
+                        linhas_log_hist = []
+                        total_inseridas, total_duplicadas, total_erros = 0, 0, 0
+                        for i, (d_ini, d_fim) in enumerate(janelas):
+                            linhas_log_hist.append(f"→ Exportando {d_ini.strftime('%d/%m/%Y')} a {d_fim.strftime('%d/%m/%Y')}...")
+                            log_hist.markdown("  \n".join(linhas_log_hist[-8:]))
+                            ok_exp, resultado = exportar_pedidos_shipped_upseller(
+                                driver, pasta_download, data_inicio_custom=d_ini, data_fim_custom=d_fim
+                            )
+                            if not ok_exp:
+                                total_erros += 1
+                                linhas_log_hist[-1] = f"❌ {d_ini.strftime('%m/%Y')}–{d_fim.strftime('%m/%Y')}: {str(resultado)[:150]}"
+                            else:
+                                ins, dup, err, _msgs = importar_pedidos_upseller_para_dashboard(client_bq, resultado)
+                                total_inseridas += ins
+                                total_duplicadas += dup
+                                total_erros += err
+                                linhas_log_hist[-1] = f"✅ {d_ini.strftime('%m/%Y')}–{d_fim.strftime('%m/%Y')}: {ins} nova(s), {dup} duplicada(s)"
+                                try:
+                                    os.remove(resultado)
+                                except Exception:
+                                    pass
+                            log_hist.markdown("  \n".join(linhas_log_hist[-8:]))
+                            progresso_hist.progress((i + 1) / len(janelas))
+
+                        st.session_state["dash_import_resultado"] = {
+                            "ok": True, "inseridas": total_inseridas, "duplicadas": total_duplicadas,
+                            "erros": total_erros, "msgs_erro": [],
+                        }
+                        st.cache_data.clear()
+                        st.rerun()
+
     try:
         # Vendas "pendente = TRUE" (SKU sem custo cadastrado, lucro calculado com
         # custo 0) ficam de fora do Dashboard até serem resolvidas na aba Validar
@@ -1341,143 +1450,203 @@ elif st.session_state.pg == "Dashboard":
             df_vendas['Quantidade'] = pd.to_numeric(df_vendas['Quantidade'])
             # 'Preço Venda' já é o Valor do Pedido inteiro (não um preço unitário),
             # então o faturamento é o próprio valor — não multiplicar pela Quantidade
-            # (senão infla o faturamento, e por tabela o "Outros Custos", em pedidos
-            # com mais de 1 unidade do mesmo produto).
+            # (senão infla o faturamento, e por tabela o Custo, em pedidos com mais
+            # de 1 unidade do mesmo produto).
             df_vendas['Faturamento'] = df_vendas['Preço Venda']
+            df_vendas['Custo'] = df_vendas['Faturamento'] - df_vendas['Lucro Total']
             df_vendas['Data'] = pd.to_datetime(df_vendas['Data'])
-            
+            df_vendas['Mes_Ref'] = df_vendas['Data'].dt.strftime('%Y-%m')
+
+            meses_map = {1:'Jan', 2:'Fev', 3:'Mar', 4:'Abr', 5:'Mai', 6:'Jun', 7:'Jul', 8:'Ago', 9:'Set', 10:'Out', 11:'Nov', 12:'Dez'}
+
             hoje = datetime.utcnow() - timedelta(hours=3)
-            inicio_mes_atual = hoje.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+            mes_atual_ref = hoje.strftime('%Y-%m')
+            df_mes_atual = df_vendas[df_vendas['Mes_Ref'] == mes_atual_ref]
 
-            df_passado = df_vendas[df_vendas['Data'] < inicio_mes_atual].copy()
-            barras_meses_fechados = pd.DataFrame()
-            if not df_passado.empty:
-                meses_map = {1:'Jan', 2:'Fev', 3:'Mar', 4:'Abr', 5:'Mai', 6:'Jun', 7:'Jul', 8:'Ago', 9:'Set', 10:'Out', 11:'Nov', 12:'Dez'}
-                df_passado['Mes_Ano'] = df_passado['Data'].dt.month.map(meses_map) + "/" + df_passado['Data'].dt.year.astype(str).str[-2:]
-                barras_meses_fechados = df_passado.groupby('Mes_Ano').agg({'Faturamento':'sum', 'Lucro Total':'sum', 'Quantidade':'sum'}).reset_index()
-                barras_meses_fechados['Outros Custos'] = barras_meses_fechados['Faturamento'] - barras_meses_fechados['Lucro Total']
-                barras_meses_fechados.rename(columns={'Mes_Ano': 'Data_Label'}, inplace=True)
+            fat_mes = df_mes_atual['Faturamento'].sum()
+            lucro_mes = df_mes_atual['Lucro Total'].sum()
+            custo_mes = fat_mes - lucro_mes
+            pct_lucro_mes = (lucro_mes / fat_mes * 100) if fat_mes else 0
 
-            df_atual_full = df_vendas[df_vendas['Data'] >= inicio_mes_atual].copy()
-            df_plot_atual = pd.DataFrame()
-            if not df_atual_full.empty:
-                total_atual = pd.DataFrame([{'Data_Label': 'Mês Atual', 'Faturamento': df_atual_full['Faturamento'].sum(), 'Lucro Total': df_atual_full['Lucro Total'].sum(), 'Quantidade': df_atual_full['Quantidade'].sum(), 'Outros Custos': df_atual_full['Faturamento'].sum() - df_atual_full['Lucro Total'].sum()}])
-                df_diario = df_atual_full.groupby('Data').agg({'Faturamento':'sum', 'Lucro Total':'sum', 'Quantidade':'sum'}).reset_index()
-                df_diario['Outros Custos'] = df_diario['Faturamento'] - df_diario['Lucro Total']
-                df_diario['Data_Label'] = df_diario['Data'].dt.strftime('%d/%m')
-                df_plot_atual = pd.concat([total_atual, df_diario], ignore_index=True)
+            # ---------- LINHA 1: cards com seta (Faturamento → Custo → Lucro → %) ----------
+            st.markdown("""
+                <style>
+                .arrow-row { display:flex; align-items:stretch; gap:0; margin-bottom:18px;
+                             border:1px solid rgba(120,113,90,0.2); border-radius:12px; overflow:hidden; }
+                .arrow-card { flex:1; padding:14px 18px; }
+                .arrow-card .lbl { font-size:11px; color:#9ca3af; text-transform:uppercase; letter-spacing:.04em; margin-bottom:4px; }
+                .arrow-card .val { font-size:21px; font-weight:700; }
+                .arrow-sep { display:flex; align-items:center; justify-content:center; width:42px;
+                             color:#9ca3af; font-size:17px; background:rgba(120,113,90,0.05); }
+                </style>
+            """, unsafe_allow_html=True)
+            st.markdown(f"""
+                <div class="arrow-row">
+                  <div class="arrow-card"><div class="lbl">Faturamento (mês)</div><div class="val">R$ {fat_mes:,.2f}</div></div>
+                  <div class="arrow-sep">→</div>
+                  <div class="arrow-card"><div class="lbl">Custo</div><div class="val" style="color:#2a78d6">R$ {custo_mes:,.2f}</div></div>
+                  <div class="arrow-sep">→</div>
+                  <div class="arrow-card"><div class="lbl">Lucro Líquido</div><div class="val" style="color:#c98500">R$ {lucro_mes:,.2f}</div></div>
+                  <div class="arrow-sep">=</div>
+                  <div class="arrow-card"><div class="lbl">% Lucro</div><div class="val" style="color:#c98500">{pct_lucro_mes:.1f}%</div></div>
+                </div>
+            """, unsafe_allow_html=True)
 
-            df_plot = pd.concat([barras_meses_fechados, df_plot_atual], ignore_index=True)
-            df_linha = df_plot[~df_plot['Data_Label'].isin(['Mês Atual']) & df_plot['Data_Label'].str.contains('/')].copy()
+            # ---------- Meta mensal (editável, guardada no BigQuery) ----------
+            def _ler_meta_mensal():
+                try:
+                    dfm = client_bq.query(
+                        "SELECT valor FROM `leandro-marketplace.DL_Store_Online.tb_config_dashboard` "
+                        "WHERE chave = 'meta_mensal'"
+                    ).to_dataframe()
+                    if not dfm.empty:
+                        return float(dfm['valor'].iloc[0])
+                except Exception:
+                    pass
+                return 0.0
 
-            df_vendas['Mes_Ref'] = df_vendas['Data'].dt.strftime('%m/%Y')
-            opcoes_meses = sorted(df_vendas['Mes_Ref'].unique(), reverse=True)
-            
-            col_f, _ = st.columns([2, 4])
-            with col_f:
-                mes_selecionado = st.selectbox("📅 Selecionar Mês para Detalhamento:", opcoes_meses)
+            def _salvar_meta_mensal(valor):
+                try:
+                    client_bq.query(
+                        "DELETE FROM `leandro-marketplace.DL_Store_Online.tb_config_dashboard` "
+                        "WHERE chave = 'meta_mensal'"
+                    ).result()
+                except Exception:
+                    pass
+                df_meta = pd.DataFrame([{"chave": "meta_mensal", "valor": float(valor)}])
+                client_bq.load_table_from_dataframe(
+                    df_meta, "leandro-marketplace.DL_Store_Online.tb_config_dashboard"
+                ).result()
 
-            df_detalhe = df_vendas[df_vendas['Mes_Ref'] == mes_selecionado].copy()
-            
-            meses_fechados = df_vendas[df_vendas['Mes_Ref'] != mes_selecionado].copy()
-            barras_hist = pd.DataFrame()
-            if not meses_fechados.empty:
-                meses_map = {1:'Jan', 2:'Fev', 3:'Mar', 4:'Abr', 5:'Mai', 6:'Jun', 7:'Jul', 8:'Ago', 9:'Set', 10:'Out', 11:'Nov', 12:'Dez'}
-                meses_fechados['Label'] = meses_fechados['Data'].dt.month.map(meses_map) + "/" + meses_fechados['Data'].dt.year.astype(str).str[-2:]
-                barras_hist = meses_fechados.groupby('Label').agg({'Faturamento':'sum', 'Lucro Total':'sum', 'Quantidade':'sum'}).reset_index()
-                barras_hist['Outros Custos'] = barras_hist['Faturamento'] - barras_hist['Lucro Total']
-                barras_hist.rename(columns={'Label': 'Data_Label'}, inplace=True)
+            meta_mensal = _ler_meta_mensal()
 
-            df_plot_mes = pd.DataFrame()
-            if not df_detalhe.empty:
-                total_mes = pd.DataFrame([{
-                    'Data_Label': f'Total {mes_selecionado}', 
-                    'Faturamento': df_detalhe['Faturamento'].sum(), 
-                    'Lucro Total': df_detalhe['Lucro Total'].sum(), 
-                    'Quantidade': df_detalhe['Quantidade'].sum(), 
-                    'Outros Custos': df_detalhe['Faturamento'].sum() - df_detalhe['Lucro Total'].sum()
-                }])
-                
-                df_dias = df_detalhe.groupby('Data').agg({'Faturamento':'sum', 'Lucro Total':'sum', 'Quantidade':'sum'}).reset_index()
-                df_dias['Outros Custos'] = df_dias['Faturamento'] - df_dias['Lucro Total']
-                df_dias['Data_Label'] = df_dias['Data'].dt.strftime('%d/%m')
-                df_plot_mes = pd.concat([total_mes, df_dias], ignore_index=True)
+            col_meta, col_chart = st.columns([1, 3])
+            with col_meta:
+                st.markdown("**🎯 Meta do Mês**")
+                if meta_mensal > 0:
+                    pct_meta = min(100, fat_mes / meta_mensal * 100)
+                    fig_meta = go.Figure(go.Pie(
+                        values=[pct_meta, max(0, 100 - pct_meta)],
+                        hole=0.75, sort=False, direction='clockwise',
+                        marker=dict(colors=['#FBBF24', '#F3F1EA']),
+                        textinfo='none', hoverinfo='skip',
+                    ))
+                    fig_meta.update_layout(
+                        showlegend=False, margin=dict(l=0, r=0, t=0, b=0), height=150,
+                        paper_bgcolor='rgba(0,0,0,0)',
+                        annotations=[dict(text=f"{pct_meta:.0f}%", x=0.5, y=0.5, font_size=22, showarrow=False)]
+                    )
+                    st.plotly_chart(fig_meta, use_container_width=True, config={'displayModeBar': False})
+                    st.caption(f"R$ {fat_mes:,.2f} de R$ {meta_mensal:,.2f}")
+                else:
+                    st.info("Meta não definida ainda.")
 
-            df_plot = pd.concat([barras_hist, df_plot_mes], ignore_index=True)
-            df_linha = df_plot[~df_plot['Data_Label'].str.contains('Total')].copy()
+                if "dash_editar_meta" not in st.session_state:
+                    st.session_state["dash_editar_meta"] = False
+                if st.button("✏️ Editar meta", key="btn_editar_meta", use_container_width=True):
+                    st.session_state["dash_editar_meta"] = not st.session_state["dash_editar_meta"]
+                if st.session_state["dash_editar_meta"]:
+                    nova_meta = st.number_input(
+                        "Meta mensal (R$)", min_value=0.0, step=100.0,
+                        value=float(meta_mensal), key="input_nova_meta"
+                    )
+                    if st.button("💾 Salvar meta", key="btn_salvar_meta", use_container_width=True):
+                        _salvar_meta_mensal(nova_meta)
+                        st.session_state["dash_editar_meta"] = False
+                        st.rerun()
 
-            st.markdown('<h3>📈 Desempenho Mensal e Diário</h3>', unsafe_allow_html=True)
-            with st.container():
-                st.markdown('<div class="plot-container">', unsafe_allow_html=True)
+            with col_chart:
+                st.markdown("**📈 Receita Operacional**")
+                if "dash_visao" not in st.session_state:
+                    st.session_state["dash_visao"] = "Mensal"
+                cb1, cb2, _sp = st.columns([1, 1, 4])
+                with cb1:
+                    if st.button("Mensal", key="btn_visao_mensal", use_container_width=True,
+                                 type="primary" if st.session_state["dash_visao"] == "Mensal" else "secondary"):
+                        st.session_state["dash_visao"] = "Mensal"
+                        st.rerun()
+                with cb2:
+                    if st.button("Diário", key="btn_visao_diario", use_container_width=True,
+                                 type="primary" if st.session_state["dash_visao"] == "Diário" else "secondary"):
+                        st.session_state["dash_visao"] = "Diário"
+                        st.rerun()
+
+                if st.session_state["dash_visao"] == "Mensal":
+                    # Só os meses — poucos, cabe tudo com folga (sem misturar dia
+                    # nenhum aqui, diferente do gráfico antigo).
+                    df_plot = df_vendas.groupby('Mes_Ref').agg(
+                        {'Faturamento': 'sum', 'Lucro Total': 'sum', 'Custo': 'sum', 'Quantidade': 'sum'}
+                    ).reset_index().sort_values('Mes_Ref')
+                    df_plot['Data_Label'] = df_plot['Mes_Ref'].apply(
+                        lambda m: meses_map[int(m.split('-')[1])] + '/' + m.split('-')[0][-2:]
+                    )
+                else:
+                    # Isola um mês por vez — só os dias dele, sem misturar mês fechado.
+                    # Botões em vez de selectbox — mesmo visual de aba usado no resto do app.
+                    opcoes_meses = sorted(df_vendas['Mes_Ref'].unique(), reverse=True)
+                    if "dash_mes_diario" not in st.session_state or st.session_state["dash_mes_diario"] not in opcoes_meses:
+                        st.session_state["dash_mes_diario"] = opcoes_meses[0]
+                    cols_meses = st.columns(len(opcoes_meses))
+                    for col_m, m in zip(cols_meses, opcoes_meses):
+                        with col_m:
+                            label_m = meses_map[int(m.split('-')[1])] + '/' + m.split('-')[0][-2:]
+                            if st.button(label_m, key=f"btn_mes_{m}", use_container_width=True,
+                                         type="primary" if st.session_state["dash_mes_diario"] == m else "secondary"):
+                                st.session_state["dash_mes_diario"] = m
+                                st.rerun()
+                    mes_detalhe = st.session_state["dash_mes_diario"]
+                    df_dia = df_vendas[df_vendas['Mes_Ref'] == mes_detalhe]
+                    df_plot = df_dia.groupby('Data').agg(
+                        {'Faturamento': 'sum', 'Lucro Total': 'sum', 'Custo': 'sum', 'Quantidade': 'sum'}
+                    ).reset_index().sort_values('Data')
+                    df_plot['Data_Label'] = df_plot['Data'].dt.strftime('%d/%m')
+
                 fig = make_subplots(specs=[[{"secondary_y": True}]])
-                
                 fig.add_trace(go.Bar(
-                    x=df_plot['Data_Label'], 
-                    y=df_plot['Outros Custos'], 
-                    name='Outros Custos', 
-                    marker_color='#FEF3C7', 
-                    hovertemplate='R$ %{y:,.2f}<extra></extra>'
+                    x=df_plot['Data_Label'], y=df_plot['Custo'], name='Custo',
+                    marker_color='#FEF3C7', hovertemplate='R$ %{y:,.2f}<extra></extra>'
                 ), secondary_y=False)
-                
                 fig.add_trace(go.Bar(
-                    x=df_plot['Data_Label'], 
-                    y=df_plot['Lucro Total'], 
-                    name='Lucro Líquido', 
-                    marker_color='#FBBF24', 
-                    hovertemplate='R$ %{y:,.2f}<extra></extra>', 
-                    text=df_plot['Lucro Total'].apply(lambda x: f'R$ {x:,.2f}'), 
-                    textposition='outside', 
-                    textfont=dict(size=12, color='#92400E', family="Arial")
+                    x=df_plot['Data_Label'], y=df_plot['Lucro Total'], name='Lucro Líquido',
+                    marker_color='#FBBF24', hovertemplate='R$ %{y:,.2f}<extra></extra>',
+                    text=df_plot['Lucro Total'].apply(lambda x: f'R$ {x:,.2f}'),
+                    textposition='outside', textfont=dict(size=12, color='#92400E', family="Arial")
                 ), secondary_y=False)
-                
+                # Qtd Vendas na escala PRÓPRIA (secondary_y independente, não a mesma
+                # do R$) — é o que fazia a linha flutuar acima das barras antes, em
+                # vez de ficar "colada" em cima (Faturamento é sempre = topo da
+                # barra empilhada, então uma linha de Faturamento sempre encosta nela).
                 fig.add_trace(go.Scatter(
-                    x=df_linha['Data_Label'], 
-                    y=df_linha['Quantidade'], 
-                    name='Qtd Vendas', 
+                    x=df_plot['Data_Label'], y=df_plot['Quantidade'], name='Qtd Vendas',
                     mode='lines+markers+text',
-                    line=dict(color='#6366F1', width=3), 
-                    marker=dict(size=8, color='#6366F1'),
-                    text=df_linha['Quantidade'], 
-                    textposition="top center",
+                    line=dict(color='#6366F1', width=3), marker=dict(size=8, color='#6366F1'),
+                    text=df_plot['Quantidade'], textposition="top center",
                     textfont=dict(size=11, color='#6366F1', family="Arial"),
                     hovertemplate='Vendas: %{y}<extra></extra>'
                 ), secondary_y=True)
 
                 fig.update_layout(
-                    barmode='stack', 
-                    paper_bgcolor='white', 
-                    plot_bgcolor='white', 
-                    yaxis=dict(showgrid=False, zeroline=False, showticklabels=False, fixedrange=True, range=[0, df_plot['Faturamento'].max() * 2.2]), 
-                    yaxis2=dict(showgrid=False, zeroline=False, showticklabels=False, fixedrange=True, range=[df_plot['Quantidade'].max() * -1.5, df_plot['Quantidade'].max() * 1.2]),
-                    xaxis=dict(title="Competência / Dias", showgrid=False, showline=True, linecolor='#E5E7EB', tickfont=dict(color='#6B7280', size=12)), 
-                    legend=dict(orientation="h", yanchor="bottom", y=1.1, xanchor="center", x=0.5, font=dict(color="#374151", size=13)), 
-                    margin=dict(l=10, r=10, t=80, b=60), 
-                    hovermode='x unified'
+                    barmode='stack',
+                    paper_bgcolor='rgba(0,0,0,0)',
+                    plot_bgcolor='rgba(0,0,0,0)',
+                    yaxis=dict(showgrid=False, zeroline=False, showticklabels=False, fixedrange=True,
+                               range=[0, df_plot['Faturamento'].max() * 2.2]),
+                    yaxis2=dict(showgrid=False, zeroline=False, showticklabels=False, fixedrange=True,
+                                range=[df_plot['Quantidade'].max() * -1.5, df_plot['Quantidade'].max() * 1.2]),
+                    xaxis=dict(title="Competência / Dias", showgrid=False, showline=True, linecolor='#E5E7EB',
+                               tickfont=dict(color='#6B7280', size=12)),
+                    legend=dict(orientation="h", yanchor="bottom", y=1.1, xanchor="center", x=0.5, font=dict(color="#374151", size=13)),
+                    margin=dict(l=10, r=10, t=80, b=60),
+                    hovermode='x unified',
                 )
                 st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
-                st.markdown('</div>', unsafe_allow_html=True)
-
-            hoje = datetime.utcnow() - timedelta(hours=3)
-            inicio_mes = hoje.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-            df_mes_atual = df_vendas[df_vendas['Data'] >= inicio_mes]
 
             st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
             st.markdown('<h3>📊 Totais Acumulados</h3>', unsafe_allow_html=True)
             c1, c2, c3 = st.columns(3)
-            c1.metric("Faturamento Total", f"R$ {df_vendas['Faturamento'].sum():.2f}")
-            c2.metric("Lucro Líquido Geral", f"R$ {df_vendas['Lucro Total'].sum():.2f}")
+            c1.metric("Faturamento Total", f"R$ {df_vendas['Faturamento'].sum():,.2f}")
+            c2.metric("Lucro Líquido Geral", f"R$ {df_vendas['Lucro Total'].sum():,.2f}")
             c3.metric("Total Itens Vendidos", int(df_vendas['Quantidade'].sum()))
-
-            st.markdown('<h3>📅 Performance do Mês Atual</h3>', unsafe_allow_html=True)
-            m1, m2, m3 = st.columns(3)
-            
-            fat_mes = df_mes_atual['Faturamento'].sum()
-            lucro_mes = df_mes_atual['Lucro Total'].sum()
-            qtd_mes = int(df_mes_atual['Quantidade'].sum())
-
-            m1.metric("Faturamento Mensal", f"R$ {fat_mes:,.2f}")
-            m2.metric("Lucro Mensal", f"R$ {lucro_mes:,.2f}")
-            m3.metric("Vendas no Mês", qtd_mes)
 
             st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
             st.markdown('<h3>💎 Lucro Líquido por Plataforma</h3>', unsafe_allow_html=True)
@@ -1487,25 +1656,25 @@ elif st.session_state.pg == "Dashboard":
             cores_lista = [cores_map.get(m, '#6B7280') for m in df_pizza['Marketplace']]
 
             fig_pizza = go.Figure(data=[go.Pie(
-                labels=df_pizza['Marketplace'].str.upper(), 
+                labels=df_pizza['Marketplace'].str.upper(),
                 values=df_pizza['Lucro Total'],
                 hole=.4,
                 marker=dict(colors=cores_lista),
-                textinfo='label+value+percent', 
+                textinfo='label+value+percent',
                 texttemplate='<b>%{label}</b><br>R$ %{value:,.2f}<br>(%{percent:.1%})',
                 hovertemplate='R$ %{value:,.2f}<extra></extra>'
             )])
 
             fig_pizza.update_layout(
-                paper_bgcolor='white', 
-                plot_bgcolor='white',  
+                paper_bgcolor='rgba(0,0,0,0)',
+                plot_bgcolor='rgba(0,0,0,0)',
                 margin=dict(l=20, r=20, t=30, b=20),
                 showlegend=True,
                 legend=dict(
-                    orientation="h", 
-                    yanchor="bottom", 
-                    y=-0.1, 
-                    xanchor="center", 
+                    orientation="h",
+                    yanchor="bottom",
+                    y=-0.1,
+                    xanchor="center",
                     x=0.5,
                     font=dict(color="#374151", size=12)
                 )
