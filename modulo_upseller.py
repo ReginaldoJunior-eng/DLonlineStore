@@ -3083,6 +3083,7 @@ def exportar_pedidos_shipped_upseller(driver, pasta_download, data_inicio_custom
             # botão "Exportar" na tela e a gente clica no errado).
             diagnostico = driver.execute_script("""
                 var out = {};
+                out.navegador = navigator.userAgent;
                 var btns = [];
                 var alvo = null;
                 document.querySelectorAll('button').forEach(function(b) {
