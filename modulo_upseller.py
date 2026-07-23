@@ -160,23 +160,53 @@ def fechar_popup(driver):
                     break
         except:
             pass
-    
+
+    # Modal "Avisos" (novidades/eventos, carrossel de vários slides) — não tem X,
+    # só "Anterior"/"Próximo". Precisa clicar em "Próximo" até esgotar os slides
+    # (o botão vira "Concluir"/"Entendi"/"OK" no último, ou o modal some sozinho).
+    # Sem isso, o fallback abaixo (clicar no primeiro <button> do modal) clicava
+    # em "Anterior" por engano — um no-op que deixava o modal aberto bloqueando
+    # a tela inteira pros cliques seguintes (foi a causa real de o Exportar
+    # nunca abrir: não era o botão em si, era esse popup por cima de tudo).
+    try:
+        for _ in range(10):
+            avancou = False
+            for txt in ["Próximo", "Next", "Concluir", "Entendi", "OK"]:
+                btns = driver.find_elements(By.XPATH, f"//button[contains(., '{txt}')]")
+                for btn in btns:
+                    if btn.is_displayed():
+                        driver.execute_script("arguments[0].click();", btn)
+                        time.sleep(0.5)
+                        avancou = True
+                        fechou = True
+                        break
+                if avancou:
+                    break
+            if not avancou:
+                break
+    except:
+        pass
+
     time.sleep(1)
-    
-    # Verifica se ainda tem modal e tenta de novo
+
+    # Verifica se ainda tem modal — clica no botão mais à direita (geralmente
+    # "Próximo"/"Fechar"/"OK", nunca "Anterior"/"Voltar", que é sempre o
+    # primeiro e um no-op na tela em que o modal abre).
     try:
         modais = driver.find_elements(By.CSS_SELECTOR, ".ant-modal-wrap:not([style*='display: none'])")
         if modais:
             for modal in modais:
                 try:
-                    close_btn = modal.find_element(By.CSS_SELECTOR, "button")
-                    driver.execute_script("arguments[0].click();", close_btn)
-                    time.sleep(0.5)
+                    botoes = [b for b in modal.find_elements(By.CSS_SELECTOR, "button") if b.is_displayed()]
+                    botoes = [b for b in botoes if b.text.strip().lower() not in ("anterior", "voltar", "back", "previous")]
+                    if botoes:
+                        driver.execute_script("arguments[0].click();", botoes[-1])
+                        time.sleep(0.5)
                 except:
                     pass
     except:
         pass
-    
+
     return fechou
 
 def ler_captcha_ocr(driver):
