@@ -3060,6 +3060,7 @@ def exportar_pedidos_shipped_upseller(driver, pasta_download, data_inicio_custom
             diagnostico = driver.execute_script("""
                 var out = {};
                 var btns = [];
+                var alvo = null;
                 document.querySelectorAll('button').forEach(function(b) {
                     if (b.textContent.trim() === 'Exportar') {
                         btns.push({
@@ -3068,18 +3069,39 @@ def exportar_pedidos_shipped_upseller(driver, pasta_download, data_inicio_custom
                             pai_classe: b.parentElement ? b.parentElement.className : null,
                             aria_expanded: b.getAttribute('aria-expanded'),
                         });
+                        if (!alvo && b.offsetParent !== null) alvo = b;
                     }
                 });
                 out.botoes_exportar = btns;
 
-                var dropdowns = [];
-                document.querySelectorAll('[class*="dropdown"], [class*="menu"], [class*="popup"], [role="menu"]').forEach(function(el) {
+                // O mais direto pra provar/descartar "tem algo por cima do botão
+                // interceptando o clique": pergunta ao navegador qual elemento
+                // está de fato no PONTO (coordenadas) do botão Exportar. Se não for
+                // o próprio botão (ou um filho dele), achamos o culpado real —
+                // em vez de só inferir pela ausência de menu.
+                if (alvo) {
+                    var r = alvo.getBoundingClientRect();
+                    var cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+                    var noPonto = document.elementFromPoint(cx, cy);
+                    out.elemento_no_ponto_do_botao = noPonto ? {
+                        tag: noPonto.tagName, classe: noPonto.className,
+                        texto: (noPonto.textContent || '').trim().slice(0, 80),
+                        e_o_proprio_botao_ou_filho: alvo.contains(noPonto) || noPonto.contains(alvo),
+                    } : null;
+                }
+
+                // Qualquer modal/overlay/mask visível (não só ant-dropdown/menu —
+                // um .ant-modal-wrap ou .ant-modal-mask não bate com esses nomes e
+                // passava batido no diagnóstico anterior).
+                var overlays = [];
+                document.querySelectorAll('[class*="modal"], [class*="mask"], [class*="overlay"], [class*="dropdown"], [class*="menu"], [class*="popup"], [role="menu"], [role="dialog"]').forEach(function(el) {
+                    if (el.offsetParent === null) return;
                     var txt = el.textContent.trim();
-                    if (txt.length < 200) {
-                        dropdowns.push({classe: el.className, visivel: el.offsetParent !== null, texto: txt.slice(0, 120)});
+                    if (txt.length < 300) {
+                        overlays.push({classe: el.className, texto: txt.slice(0, 150)});
                     }
                 });
-                out.elementos_dropdown_like = dropdowns.slice(0, 15);
+                out.elementos_dropdown_like = overlays.slice(0, 20);
 
                 var textos = [];
                 document.querySelectorAll('a, li, span, div, button').forEach(function(el) {
