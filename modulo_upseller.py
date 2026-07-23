@@ -299,6 +299,26 @@ def criar_driver(pasta_download=None):
             })
         except Exception:
             pass
+
+    # Confirmado em produção (diagnóstico com window.matchMedia): o Chrome
+    # headless da nuvem reporta `(hover: none)` e `(pointer: coarse)` — como se
+    # fosse um dispositivo touch sem mouse de verdade — mesmo em versão recente
+    # do Chromium. O dropdown "Exportar" do Upseller nunca abria porque nenhum
+    # evento sintético de mouse muda isso: é a própria media query do CSS que
+    # decide, não um listener JS. Força via CDP pra bater com o Chrome normal
+    # (usado localmente, onde o dropdown sempre funcionou).
+    try:
+        driver.execute_cdp_cmd("Emulation.setEmulatedMedia", {
+            "features": [
+                {"name": "hover", "value": "hover"},
+                {"name": "pointer", "value": "fine"},
+                {"name": "any-hover", "value": "hover"},
+                {"name": "any-pointer", "value": "fine"},
+            ]
+        })
+    except Exception:
+        pass
+
     return driver
 
 def driver_esta_vivo(driver):
@@ -2781,6 +2801,22 @@ def exportar_pedidos_shipped_upseller(driver, pasta_download, data_inicio_custom
             driver.execute_cdp_cmd("Page.setDownloadBehavior", {
                 "behavior": "allow",
                 "downloadPath": os.path.abspath(pasta_download),
+            })
+        except Exception:
+            pass
+
+        # Reforça aqui também (já é setado em criar_driver, mas por segurança —
+        # caso essa emulação não sobreviva à navegação em alguma versão do
+        # Chromium): sem isso, o Chrome headless reporta `(hover: none)` pro
+        # Upseller e o dropdown "Exportar" nunca abre, mesmo com clique certo.
+        try:
+            driver.execute_cdp_cmd("Emulation.setEmulatedMedia", {
+                "features": [
+                    {"name": "hover", "value": "hover"},
+                    {"name": "pointer", "value": "fine"},
+                    {"name": "any-hover", "value": "hover"},
+                    {"name": "any-pointer", "value": "fine"},
+                ]
             })
         except Exception:
             pass

@@ -1115,7 +1115,12 @@ elif st.session_state.pg == "Dashboard":
     with col_atualizar:
         st.markdown("<div style='padding-top:28px'></div>", unsafe_allow_html=True)
         if st.button("🔄 Atualizar", type="primary", use_container_width=True):
-            st.session_state["dash_atualizar_aberto"] = not st.session_state.get("dash_atualizar_aberto", False)
+            st.session_state["dash_atualizar_aberto"] = True
+            # Dispara a busca sozinha assim que o login estiver pronto — sem
+            # precisar de um segundo clique num botão separado (era a mesma
+            # coisa na prática, só um passo a mais). Se o login exigir CAPTCHA/
+            # código manual, fica pendente até o rerun em que ups_logado virar True.
+            st.session_state["dash_atualizar_executar"] = True
     st.markdown('<div class="section-header"></div>', unsafe_allow_html=True)
 
     if st.session_state.get("dash_atualizar_aberto"):
@@ -1182,90 +1187,34 @@ elif st.session_state.pg == "Dashboard":
                         st.cache_data.clear()
                         st.rerun()
 
-            if st.session_state.get("ups_logado"):
-                if st.button("📊 Buscar Pedidos Enviados do Upseller", type="primary", use_container_width=True, key="btn_buscar_pedidos_topo"):
-                    import tempfile
-                    pasta_download = os.path.join(tempfile.gettempdir(), "upseller_exports")
-                    driver = st.session_state.get("ups_driver")
-                    with st.spinner("Exportando pedidos do Upseller (pode levar um tempinho com muitas páginas)..."):
-                        ok_exp, resultado = exportar_pedidos_shipped_upseller(driver, pasta_download)
-                    if not ok_exp:
-                        st.session_state["dash_import_resultado"] = {"ok": False, "msg": resultado}
-                    else:
-                        with st.spinner("Processando planilha e registrando vendas novas..."):
-                            inseridas, duplicadas, erros, msgs_erro = importar_pedidos_upseller_para_dashboard(client_bq, resultado)
-                        st.session_state["dash_import_resultado"] = {
-                            "ok": True, "inseridas": inseridas, "duplicadas": duplicadas,
-                            "erros": erros, "msgs_erro": msgs_erro,
-                        }
-                        try:
-                            os.remove(resultado)
-                        except Exception:
-                            pass
-                        st.cache_data.clear()
-                    st.rerun()
-
-                # Histórico completo do ano — o calendário só seleciona 2 meses
-                # ADJACENTES por vez (ver exportar_pedidos_shipped_upseller), então
-                # pra cobrir o ano inteiro isso roda a exportação várias vezes, uma
-                # por par de meses (jan-fev, mar-abr, ...), até o mês atual.
-                with st.expander("📆 Importar histórico mais antigo (ano inteiro)"):
-                    st.caption(
-                        "Roda a exportação várias vezes, 2 meses por vez (jan-fev, mar-abr, ...), "
-                        "até o mês atual. Pode demorar — é basicamente rodar o botão de cima várias vezes."
-                    )
-                    ano_hist = st.number_input("Ano", min_value=2020, max_value=datetime.utcnow().year,
-                                                value=datetime.utcnow().year, step=1, key="input_ano_historico")
-                    if st.button("🚀 Importar ano inteiro", key="btn_importar_ano"):
-                        import tempfile, calendar as _calendar_mod
-                        pasta_download = os.path.join(tempfile.gettempdir(), "upseller_exports")
-                        driver = st.session_state.get("ups_driver")
-                        hoje_hist = (datetime.utcnow() - timedelta(hours=3)).date()
-
-                        janelas = []
-                        mes_j = 1
-                        while mes_j <= 12:
-                            d_ini = date(int(ano_hist), mes_j, 1)
-                            if d_ini > hoje_hist:
-                                break
-                            mes_fim_j = min(mes_j + 1, 12)
-                            ultimo_dia_j = _calendar_mod.monthrange(int(ano_hist), mes_fim_j)[1]
-                            d_fim = date(int(ano_hist), mes_fim_j, ultimo_dia_j)
-                            janelas.append((d_ini, d_fim))
-                            mes_j += 2
-
-                        progresso_hist = st.progress(0.0)
-                        log_hist = st.empty()
-                        linhas_log_hist = []
-                        total_inseridas, total_duplicadas, total_erros = 0, 0, 0
-                        for i, (d_ini, d_fim) in enumerate(janelas):
-                            linhas_log_hist.append(f"→ Exportando {d_ini.strftime('%d/%m/%Y')} a {d_fim.strftime('%d/%m/%Y')}...")
-                            log_hist.markdown("  \n".join(linhas_log_hist[-8:]))
-                            ok_exp, resultado = exportar_pedidos_shipped_upseller(
-                                driver, pasta_download, data_inicio_custom=d_ini, data_fim_custom=d_fim
-                            )
-                            if not ok_exp:
-                                total_erros += 1
-                                linhas_log_hist[-1] = f"❌ {d_ini.strftime('%m/%Y')}–{d_fim.strftime('%m/%Y')}: {str(resultado)[:150]}"
-                            else:
-                                ins, dup, err, _msgs = importar_pedidos_upseller_para_dashboard(client_bq, resultado)
-                                total_inseridas += ins
-                                total_duplicadas += dup
-                                total_erros += err
-                                linhas_log_hist[-1] = f"✅ {d_ini.strftime('%m/%Y')}–{d_fim.strftime('%m/%Y')}: {ins} nova(s), {dup} duplicada(s)"
-                                try:
-                                    os.remove(resultado)
-                                except Exception:
-                                    pass
-                            log_hist.markdown("  \n".join(linhas_log_hist[-8:]))
-                            progresso_hist.progress((i + 1) / len(janelas))
-
-                        st.session_state["dash_import_resultado"] = {
-                            "ok": True, "inseridas": total_inseridas, "duplicadas": total_duplicadas,
-                            "erros": total_erros, "msgs_erro": [],
-                        }
-                        st.cache_data.clear()
-                        st.rerun()
+            # Clicar em "Atualizar" já basta — se o login não estiver pronto
+            # ainda (esperando CAPTCHA/código manual no widget acima), fica
+            # pendente e roda sozinho assim que ups_logado virar True num
+            # rerun seguinte. Substitui os antigos botões "Buscar Pedidos
+            # Enviados do Upseller" e "Importar histórico mais antigo", que
+            # eram passos redundantes pro mesmo resultado.
+            if st.session_state.get("dash_atualizar_executar") and st.session_state.get("ups_logado"):
+                st.session_state["dash_atualizar_executar"] = False
+                import tempfile
+                pasta_download = os.path.join(tempfile.gettempdir(), "upseller_exports")
+                driver = st.session_state.get("ups_driver")
+                with st.spinner("Exportando pedidos do Upseller (pode levar um tempinho com muitas páginas)..."):
+                    ok_exp, resultado = exportar_pedidos_shipped_upseller(driver, pasta_download)
+                if not ok_exp:
+                    st.session_state["dash_import_resultado"] = {"ok": False, "msg": resultado}
+                else:
+                    with st.spinner("Processando planilha e registrando vendas novas..."):
+                        inseridas, duplicadas, erros, msgs_erro = importar_pedidos_upseller_para_dashboard(client_bq, resultado)
+                    st.session_state["dash_import_resultado"] = {
+                        "ok": True, "inseridas": inseridas, "duplicadas": duplicadas,
+                        "erros": erros, "msgs_erro": msgs_erro,
+                    }
+                    try:
+                        os.remove(resultado)
+                    except Exception:
+                        pass
+                    st.cache_data.clear()
+                st.rerun()
 
     try:
         # Vendas "pendente = TRUE" (SKU sem custo cadastrado, lucro calculado com
