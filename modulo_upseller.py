@@ -2891,17 +2891,45 @@ def exportar_pedidos_shipped_upseller(driver, pasta_download, data_inicio_custom
         time.sleep(0.3)
 
         # Confirma o intervalo escolhido — é um <a class="ant-calendar-ok-btn">, não
-        # um <button> comum.
-        driver.execute_script("""
-            var els = document.querySelectorAll('.ant-calendar-ok-btn, a[role="button"]');
-            for (var el of els) {
-                if (el.textContent.trim() === 'Ok' && el.offsetParent !== null) {
-                    el.click();
-                    return true;
-                }
-            }
-            return false;
-        """)
+        # um <button> comum. Mesmo problema já visto no botão "Exportar": um
+        # .click() via JS pode não disparar o listener do Vue, e o calendário
+        # fica aberto (ainda que sem parecer) por cima da tela — daí o clique
+        # seguinte no "Exportar" cai nesse overlay em vez do botão de verdade,
+        # e o dropdown nunca abre (foi exatamente o sintoma visto em produção:
+        # botão "Exportar" visível, nenhum menu aparece). Por isso usa clique
+        # REAL (ActionChains) e confirma que o painel do calendário sumiu antes
+        # de seguir, re-tentando se ainda estiver aberto.
+        def _calendario_ainda_aberto():
+            return driver.execute_script("""
+                var els = document.querySelectorAll('.ant-calendar-table, .ant-calendar-ok-btn');
+                for (var el of els) { if (el.offsetParent !== null) return true; }
+                return false;
+            """)
+
+        def _clicar_ok_calendario():
+            from selenium.webdriver.common.action_chains import ActionChains
+            elemento = None
+            for el in driver.find_elements(By.CSS_SELECTOR, ".ant-calendar-ok-btn, a[role='button']"):
+                if el.text.strip() == "Ok" and el.is_displayed():
+                    elemento = el
+                    break
+            if not elemento:
+                return False
+            try:
+                ActionChains(driver).move_to_element(elemento).pause(0.2).click().perform()
+            except Exception:
+                pass
+            driver.execute_script("arguments[0].click();", elemento)
+            return True
+
+        for _tentativa_ok in range(3):
+            if not _calendario_ainda_aberto():
+                break
+            _clicar_ok_calendario()
+            for _ in range(6):
+                time.sleep(0.4)
+                if not _calendario_ainda_aberto():
+                    break
 
         # Trocar o filtro de data dispara um recarregamento da lista de pedidos —
         # se a gente clicar em "Exportar" enquanto isso ainda está rodando, o
