@@ -3008,7 +3008,18 @@ def exportar_pedidos_shipped_upseller(driver, pasta_download, data_inicio_custom
             (mousedown/mouseup) em vez de só um evento de clique sintético. Em
             retentativas (tentar_js_tambem=True) também dispara um .click() JS no
             botão e no <div> pai logo em seguida — cobre o caso do clique real ter
-            sido "engolido" por um overlay/re-render que já sumiu quando o JS roda."""
+            sido "engolido" por um overlay/re-render que já sumiu quando o JS roda.
+
+            Dropdown do Ant Design abre por padrão no HOVER, não só no clique — um
+            usuário de verdade passa o mouse por cima antes de clicar, disparando
+            mouseenter/mouseover que o componente escuta. Confirmado em produção
+            (diagnóstico com elementFromPoint) que o clique cai certinho em cima do
+            botão, sem overlay nenhum bloqueando, e mesmo assim o menu não abre —
+            no Chrome headless da nuvem o ActionChains.move_to_element às vezes não
+            dispara esse hover de verdade (diferente do Chrome visível local, onde o
+            cursor do SO realmente se move). Por isso, além do hover real via
+            ActionChains, dispara mouseenter/mouseover sintético explícito no botão
+            E no <div> pai (.ant-dropdown-trigger) antes de clicar."""
             from selenium.webdriver.common.action_chains import ActionChains
             try:
                 elemento = None
@@ -3019,6 +3030,19 @@ def exportar_pedidos_shipped_upseller(driver, pasta_download, data_inicio_custom
                 if not elemento:
                     return False
                 driver.execute_script("arguments[0].scrollIntoView({block:'center'});", elemento)
+                time.sleep(0.3)
+                ActionChains(driver).move_to_element(elemento).pause(0.3).perform()
+                driver.execute_script("""
+                    function disparar(el) {
+                        ['mouseenter', 'mouseover', 'mousemove'].forEach(function(tipo) {
+                            el.dispatchEvent(new MouseEvent(tipo, {bubbles: true, cancelable: true, view: window}));
+                        });
+                    }
+                    var el = arguments[0];
+                    disparar(el);
+                    var pai = el.closest('.ant-dropdown-trigger') || el.parentElement;
+                    if (pai) disparar(pai);
+                """, elemento)
                 time.sleep(0.3)
                 ActionChains(driver).move_to_element(elemento).pause(0.2).click().perform()
                 if tentar_js_tambem:
