@@ -3084,6 +3084,14 @@ def exportar_pedidos_shipped_upseller(driver, pasta_download, data_inicio_custom
             diagnostico = driver.execute_script("""
                 var out = {};
                 out.navegador = navigator.userAgent;
+                // Se o dropdown abre via CSS controlado por @media (hover: hover) —
+                // comum em frameworks pensados pra funcionar em touch também — nenhum
+                // evento sintético de mouse resolve, porque a barreira é CSS, não JS.
+                // Chrome headless às vezes reporta capacidade de hover diferente do
+                // Chrome normal, mesmo em versão recente.
+                out.tem_hover = window.matchMedia('(hover: hover)').matches;
+                out.pointer_fino = window.matchMedia('(pointer: fine)').matches;
+                out.max_touch_points = navigator.maxTouchPoints;
                 var btns = [];
                 var alvo = null;
                 document.querySelectorAll('button').forEach(function(b) {
