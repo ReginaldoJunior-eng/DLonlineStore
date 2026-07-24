@@ -241,6 +241,47 @@ def ler_captcha_ocr(driver):
 
 # ── DRIVER ────────────────────────────────────────────────────────────────────
 
+# Guarda referência viva dos displays virtuais abertos — sem isso o Python
+# garbage-colector pode derrubar o objeto Display (e o Xvfb junto) assim que
+# criar_driver() termina, mesmo com o Chrome ainda rodando em cima dele.
+_DISPLAYS_VIRTUAIS_ATIVOS = []
+_ULTIMO_ERRO_DISPLAY_VIRTUAL = None
+
+def _iniciar_display_virtual():
+    """Sobe um display X virtual (Xvfb, via pyvirtualdisplay) pro Chrome rodar
+    'com tela' mesmo na Streamlit Cloud (que não tem monitor nenhum).
+
+    Motivo: confirmado em produção (diagnóstico com window.matchMedia) que o
+    Chrome headless (mesmo --headless=new, versão recente) no Linux relata
+    `(hover: none)` / `(pointer: coarse)` pro JavaScript da página — não é uma
+    questão de CSS que dê pra sobrescrever via CDP (Emulation.setEmulatedMedia
+    foi tentado e não mudou nada), é o próprio Chromium relatando a ausência
+    real de um dispositivo apontador, já que roda sem nenhum display. O
+    dropdown "Exportar" do Upseller só abre no hover (confirmado via DevTools:
+    listener de mouseenter no próprio Upseller), e isso nunca funciona sem um
+    ambiente que reporte hover de verdade. Rodando o Chrome NÃO-headless, mas
+    apontado pra esse display virtual, ele "acha" que tem um monitor com mouse
+    conectado — sem precisar de tela real nenhuma — e passa a se comportar
+    igual ao Chrome visível local, onde isso sempre funcionou.
+    Retorna True se conseguiu subir o display, False se não (nesse caso,
+    criar_driver() cai de volta pro modo headless normal como fallback)."""
+    global _ULTIMO_ERRO_DISPLAY_VIRTUAL
+    try:
+        from pyvirtualdisplay import Display
+        display = Display(visible=False, size=(1920, 1080))
+        display.start()
+        _DISPLAYS_VIRTUAIS_ATIVOS.append(display)
+        _ULTIMO_ERRO_DISPLAY_VIRTUAL = None
+        return True
+    except Exception as e:
+        # Guardado num lugar visível de propósito — antes esse erro sumia
+        # silenciosamente e a única pista de que o Xvfb não subiu era o
+        # user-agent continuar como "HeadlessChrome" no diagnóstico, sem saber
+        # o motivo (xvfb não instalado? pyvirtualdisplay não instalado? Xvfb
+        # não conseguiu iniciar?).
+        _ULTIMO_ERRO_DISPLAY_VIRTUAL = f"{type(e).__name__}: {e}"
+        return False
+
 def _chromium_do_sistema():
     """Detecta automaticamente o Chromium instalado via packages.txt (Streamlit
     Cloud/Debian) — em vez de depender de uma secret configurada manualmente
@@ -275,14 +316,21 @@ def criar_driver(pasta_download=None):
         })
 
     # Se existe um Chromium instalado no sistema (packages.txt no Streamlit Cloud),
-    # usa ele direto e roda headless — é sinal de que estamos num servidor sem tela.
-    # Localmente esse caminho não existe, então cai no Chrome normal (visível, via
+    # usa ele direto — é sinal de que estamos num servidor sem tela. Localmente
+    # esse caminho não existe, então cai no Chrome normal (visível, via
     # webdriver_manager) sem precisar configurar nada.
     bin_path, drv_path = _chromium_do_sistema()
     if bin_path and drv_path:
-        opts.add_argument("--headless=new")
-        opts.add_argument("--disable-gpu")
         opts.add_argument("--window-size=1920,1080")
+        # NÃO roda headless de propósito: sobe um display X virtual (Xvfb) e
+        # deixa o Chrome "achar" que tem monitor/mouse de verdade — ver
+        # _iniciar_display_virtual() pro motivo (hover quebrado no headless).
+        # Só cai pro --headless=new se o Xvfb não estiver disponível (fallback,
+        # login/exportação básica ainda funcionam, só o dropdown por hover que
+        # pode voltar a falhar nesse caso).
+        if not _iniciar_display_virtual():
+            opts.add_argument("--headless=new")
+            opts.add_argument("--disable-gpu")
         opts.binary_location = bin_path
         driver = webdriver.Chrome(service=Service(drv_path), options=opts)
     else:
@@ -3235,6 +3283,8 @@ def exportar_pedidos_shipped_upseller(driver, pasta_download, data_inicio_custom
 
                 return out;
             """)
+            diagnostico["erro_display_virtual"] = _ULTIMO_ERRO_DISPLAY_VIRTUAL
+            diagnostico["display_virtual_ativo"] = len(_DISPLAYS_VIRTUAIS_ATIVOS) > 0
             return _falha(f"❌ Menu 'Exportar' não abriu. Diagnóstico: {diagnostico}")
 
         # 2. Clica "Exportar Todos os Pedidos" — tenta a frase completa primeiro,

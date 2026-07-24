@@ -10,3 +10,4 @@ selenium
 webdriver-manager
 Pillow
 requests
+PyVirtualDisplay
