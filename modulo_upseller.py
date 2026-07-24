@@ -369,6 +369,19 @@ def criar_driver(pasta_download=None):
 
     return driver
 
+def _minimizar_janela(driver):
+    """Minimizar é só cosmético (evita a janela do Chrome 'aparecer' quando
+    roda localmente com tela de verdade) — não faz diferença nenhuma quando
+    roda sem monitor real. No Xvfb (display virtual usado na nuvem, sem
+    nenhum gerenciador de janelas) essa chamada lança WebDriverException,
+    porque minimizar depende de um window manager pra processar o pedido — sem
+    isso, o login inteiro quebrava com um erro que derrubava a página toda,
+    mesmo já tendo logado com sucesso antes dessa linha."""
+    try:
+        driver.minimize_window()
+    except Exception:
+        pass
+
 def driver_esta_vivo(driver):
     """Confirma se a sessão do Chrome por trás do driver ainda existe (não foi
     fechada manualmente, não travou, não caiu). Sem essa checagem, o app pode achar
@@ -392,7 +405,7 @@ def _tentar_reconectar_via_cookies(client=None):
         novo_driver = criar_driver()
         if login_por_cookies(novo_driver, client):
             fechar_popup(novo_driver)
-            novo_driver.minimize_window()
+            _minimizar_janela(novo_driver)
             return novo_driver
         novo_driver.quit()
         return None
@@ -465,7 +478,7 @@ def widget_login_upseller(client=None):
                         driver = criar_driver()
                         if login_por_cookies(driver, client):
                             fechar_popup(driver)
-                            driver.minimize_window()
+                            _minimizar_janela(driver)
                             st.session_state["ups_driver"] = driver
                             st.session_state["ups_logado"] = True
                             st.session_state["ups_etapa"] = 3
@@ -563,7 +576,7 @@ def widget_login_upseller(client=None):
                         elif "login" not in url:
                             fechar_popup(driver)
                             salvar_cookies(driver, client)
-                            driver.minimize_window()
+                            _minimizar_janela(driver)
                             st.session_state["ups_logado"] = True
                             st.session_state["ups_etapa"] = 3
                             estado_global["driver"] = driver
@@ -628,7 +641,7 @@ def widget_login_upseller(client=None):
                     time.sleep(4)
                     if "login" not in driver.current_url:
                         salvar_cookies(driver, client)
-                        driver.minimize_window()
+                        _minimizar_janela(driver)
                         st.session_state["ups_logado"] = True
                         st.session_state["ups_etapa"] = 3
                         estado_global["driver"] = driver
