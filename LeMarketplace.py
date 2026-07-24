@@ -1142,6 +1142,17 @@ elif st.session_state.pg == "Dashboard":
             if resultado_ant:
                 if resultado_ant.get("ok") is False:
                     st.error(resultado_ant["msg"])
+                    # Não dá pra ver o Chrome rodando na nuvem (headless, sem
+                    # tela nenhuma — só local abre janela de verdade). Por isso
+                    # exportar_pedidos_shipped_upseller tira um screenshot bem na
+                    # hora do erro e salva sempre nesse mesmo caminho — mostra
+                    # aqui pra "enxergar" o que travou também quando roda online.
+                    import tempfile as _tempfile_screenshot
+                    caminho_print_erro = os.path.join(
+                        _tempfile_screenshot.gettempdir(), "upseller_exports", "ultimo_erro_screenshot.png"
+                    )
+                    if os.path.exists(caminho_print_erro):
+                        st.image(caminho_print_erro, caption="Tela do Chrome no momento do erro (nuvem)")
                 else:
                     if resultado_ant.get("inseridas"):
                         st.success(f"✅ {resultado_ant['inseridas']} venda(s) nova(s) registrada(s).")

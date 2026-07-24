@@ -2795,6 +2795,22 @@ def exportar_pedidos_shipped_upseller(driver, pasta_download, data_inicio_custom
     from selenium.webdriver.common.by import By
     import glob
 
+    def _falha(msg):
+        """Em vez de só devolver a mensagem de erro: tira um screenshot de como
+        o Chrome headless da nuvem está vendo a tela NESSE exato momento e salva
+        sempre no MESMO caminho fixo (pasta_download/ultimo_erro_screenshot.png).
+        Sem tela pra olhar (é headless, roda sem cabeça mesmo na nuvem —
+        diferente de local, onde dá pra ver a janela do Chrome de verdade), esse
+        é o jeito de "enxergar" o que travou sem precisar só de diagnóstico em
+        texto. Retorna um 2-tuple igual sempre (não muda a assinatura da função
+        pra quem já chama isso por aí) — a UI (LeMarketplace.py) só confere esse
+        caminho fixo direto, sem precisar receber nada extra daqui."""
+        try:
+            driver.save_screenshot(os.path.join(pasta_download, "ultimo_erro_screenshot.png"))
+        except Exception:
+            pass
+        return False, msg
+
     try:
         os.makedirs(pasta_download, exist_ok=True)
         try:
@@ -3081,6 +3097,25 @@ def exportar_pedidos_shipped_upseller(driver, pasta_download, data_inicio_custom
                 """, elemento)
                 time.sleep(0.3)
                 ActionChains(driver).move_to_element(elemento).pause(0.2).click().perform()
+
+                # Forçar hover via CDP (Emulation.setEmulatedMedia) não resolveu em
+                # produção — o Chrome headless da nuvem continua reportando
+                # (hover: none) mesmo assim (limitação conhecida do Chromium
+                # headless, não é só CSS). Em vez de insistir no hover, ativa por
+                # TECLADO: focar o botão e apertar Enter/Espaço dispara um clique
+                # de verdade (isTrusted) via comportamento nativo do navegador pra
+                # <button>, sem depender de hover nenhum — mecanismo totalmente
+                # diferente do clique de mouse, vale tentar em paralelo.
+                from selenium.webdriver.common.keys import Keys
+                try:
+                    driver.execute_script("arguments[0].focus();", elemento)
+                    time.sleep(0.2)
+                    ActionChains(driver).send_keys(Keys.ENTER).perform()
+                    time.sleep(0.3)
+                    ActionChains(driver).send_keys(Keys.SPACE).perform()
+                except Exception:
+                    pass
+
                 if tentar_js_tambem:
                     time.sleep(0.4)
                     driver.execute_script("""
@@ -3094,7 +3129,7 @@ def exportar_pedidos_shipped_upseller(driver, pasta_download, data_inicio_custom
                 return False
 
         if not _clicar_botao_exportar():
-            return False, "❌ Botão 'Exportar' não encontrado na tela de Pedidos Enviados"
+            return _falha("❌ Botão 'Exportar' não encontrado na tela de Pedidos Enviados")
 
         menu_aberto = False
         for _tentativa in range(6):
@@ -3132,16 +3167,29 @@ def exportar_pedidos_shipped_upseller(driver, pasta_download, data_inicio_custom
                 var alvo = null;
                 document.querySelectorAll('button').forEach(function(b) {
                     if (b.textContent.trim() === 'Exportar') {
+                        var pai = b.closest('.ant-dropdown-trigger') || b.parentElement;
                         btns.push({
                             visivel: b.offsetParent !== null,
                             html: b.outerHTML.slice(0, 300),
-                            pai_classe: b.parentElement ? b.parentElement.className : null,
+                            pai_classe: pai ? pai.className : null,
                             aria_expanded: b.getAttribute('aria-expanded'),
+                            // O estado real do dropdown (aberto/fechado) costuma
+                            // ficar no elemento pai (.ant-dropdown-trigger), não no
+                            // <button> interno — o botão em si nunca teve
+                            // aria-expanded, então vale ver se é o pai que carrega
+                            // esse estado (e outros atributos aria-*).
+                            pai_aria_expanded: pai ? pai.getAttribute('aria-expanded') : null,
+                            pai_aria_haspopup: pai ? pai.getAttribute('aria-haspopup') : null,
+                            pai_html: pai ? pai.outerHTML.slice(0, 200) : null,
+                            focado: document.activeElement === b,
                         });
                         if (!alvo && b.offsetParent !== null) alvo = b;
                     }
                 });
                 out.botoes_exportar = btns;
+                out.elemento_focado_agora = document.activeElement ? {
+                    tag: document.activeElement.tagName, texto: (document.activeElement.textContent || '').trim().slice(0, 40)
+                } : null;
 
                 // O mais direto pra provar/descartar "tem algo por cima do botão
                 // interceptando o clique": pergunta ao navegador qual elemento
@@ -3181,7 +3229,7 @@ def exportar_pedidos_shipped_upseller(driver, pasta_download, data_inicio_custom
 
                 return out;
             """)
-            return False, f"❌ Menu 'Exportar' não abriu. Diagnóstico: {diagnostico}"
+            return _falha(f"❌ Menu 'Exportar' não abriu. Diagnóstico: {diagnostico}")
 
         # 2. Clica "Exportar Todos os Pedidos" — tenta a frase completa primeiro,
         # cai pra "exportar todos" (sem "os pedidos") se o texto do menu mudou.
@@ -3213,7 +3261,7 @@ def exportar_pedidos_shipped_upseller(driver, pasta_download, data_inicio_custom
                 });
                 return textos;
             """)
-            return False, f"❌ 'Exportar Todos os Pedidos' não encontrado (mas o menu tinha aberto). Itens com 'exportar' no menu: {diagnostico2}"
+            return _falha(f"❌ 'Exportar Todos os Pedidos' não encontrado (mas o menu tinha aberto). Itens com 'exportar' no menu: {diagnostico2}")
         time.sleep(2)
 
         # 3. Modal "Informações de Configuração" — garante que os 3 checkboxes
@@ -3244,7 +3292,7 @@ def exportar_pedidos_shipped_upseller(driver, pasta_download, data_inicio_custom
             return false;
         """)
         if not clicou_exportar_modal:
-            return False, "❌ Botão 'Exportar' do modal de configuração não encontrado"
+            return _falha("❌ Botão 'Exportar' do modal de configuração não encontrado")
         time.sleep(2)
 
         # 5. Captura o "Total de Páginas" (ex: <div class="fw_bold">17</div>) e insere
@@ -3284,7 +3332,7 @@ def exportar_pedidos_shipped_upseller(driver, pasta_download, data_inicio_custom
             return false;
         """)
         if not clicou_exportar_final:
-            return False, "❌ Botão 'Exportar' final não encontrado"
+            return _falha("❌ Botão 'Exportar' final não encontrado")
 
         # 7. Espera a Upseller processar a exportação antes de procurar "Baixar" —
         # com muitos pedidos (~11 páginas) isso não é instantâneo.
@@ -3313,7 +3361,7 @@ def exportar_pedidos_shipped_upseller(driver, pasta_download, data_inicio_custom
             time.sleep(3)
 
         if not clicou_baixar:
-            return False, "❌ Botão 'Baixar' não encontrado — a exportação pode ainda estar processando, tente de novo em instantes"
+            return _falha("❌ Botão 'Baixar' não encontrado — a exportação pode ainda estar processando, tente de novo em instantes")
 
         # 8. Espera o arquivo aparecer na pasta de download configurada no driver.
         arquivo_novo = None
@@ -3326,9 +3374,9 @@ def exportar_pedidos_shipped_upseller(driver, pasta_download, data_inicio_custom
                 break
 
         if not arquivo_novo:
-            return False, f"❌ Arquivo não apareceu em {pasta_download} a tempo (clicou Baixar, mas o download não foi detectado)"
+            return _falha(f"❌ Arquivo não apareceu em {pasta_download} a tempo (clicou Baixar, mas o download não foi detectado)")
 
         return True, arquivo_novo
 
     except Exception as e:
-        return False, f"❌ Erro ao exportar pedidos: {str(e)[:200]}"
+        return _falha(f"❌ Erro ao exportar pedidos: {str(e)[:200]}")
