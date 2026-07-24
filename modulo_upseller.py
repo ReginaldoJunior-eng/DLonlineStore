@@ -3053,32 +3053,32 @@ def exportar_pedidos_shipped_upseller(driver, pasta_download, data_inicio_custom
                 return false;
             """)
 
-        def _clicar_botao_exportar(tentar_js_tambem=False):
-            """Clique REAL do Selenium (mover o mouse + clicar), não .click() via JS —
-            o gatilho do dropdown (classe ant-dropdown-trigger) fica no <div> pai do
-            botão, e o listener do Vue pode depender de eventos de mouse de verdade
-            (mousedown/mouseup) em vez de só um evento de clique sintético. Em
-            retentativas (tentar_js_tambem=True) também dispara um .click() JS no
-            botão e no <div> pai logo em seguida — cobre o caso do clique real ter
-            sido "engolido" por um overlay/re-render que já sumiu quando o JS roda.
+        def _achar_elemento_e_trigger():
+            """Acha o <button>Exportar</button> e o <div class="...ant-dropdown-
+            trigger"> que é o pai real dele (confirmado via DevTools/Event
+            Listeners do próprio Upseller: o listener de 'mouseenter' que abre o
+            menu está registrado exatamente nesse <div>, não no botão)."""
+            for b in driver.find_elements(By.TAG_NAME, "button"):
+                if b.text.strip() == "Exportar" and b.is_displayed():
+                    trigger = driver.execute_script(
+                        "return arguments[0].closest('.ant-dropdown-trigger') || arguments[0].parentElement;", b
+                    )
+                    return b, trigger
+            return None, None
 
-            Dropdown do Ant Design abre por padrão no HOVER, não só no clique — um
-            usuário de verdade passa o mouse por cima antes de clicar, disparando
-            mouseenter/mouseover que o componente escuta. Confirmado em produção
-            (diagnóstico com elementFromPoint) que o clique cai certinho em cima do
-            botão, sem overlay nenhum bloqueando, e mesmo assim o menu não abre —
-            no Chrome headless da nuvem o ActionChains.move_to_element às vezes não
-            dispara esse hover de verdade (diferente do Chrome visível local, onde o
-            cursor do SO realmente se move). Por isso, além do hover real via
-            ActionChains, dispara mouseenter/mouseover sintético explícito no botão
-            E no <div> pai (.ant-dropdown-trigger) antes de clicar."""
+        def _hover_dropdown_trigger():
+            """Só HOVER, sem clicar — confirmado via DevTools (Event Listeners do
+            Upseller de verdade) que quem abre o menu é um listener de
+            'mouseenter' no <div class="...ant-dropdown-trigger">, não um clique.
+            Clicar OU sintetizar mouseenter e DEPOIS clicar no mesmo elemento é
+            arriscado: se o hover já abriu o menu, um clique em seguida no
+            gatilho pode FECHAR de novo (toggle) — foi o que aconteceu antes
+            (confirmado pelo screenshot automático: abriu o dropdown errado,
+            sinal de que o clique subsequente bagunçou o estado). Por isso hover
+            e clique agora são tentativas SEPARADAS, nunca as duas juntas."""
             from selenium.webdriver.common.action_chains import ActionChains
             try:
-                elemento = None
-                for b in driver.find_elements(By.TAG_NAME, "button"):
-                    if b.text.strip() == "Exportar" and b.is_displayed():
-                        elemento = b
-                        break
+                elemento, trigger = _achar_elemento_e_trigger()
                 if not elemento:
                     return False
                 driver.execute_script("arguments[0].scrollIntoView({block:'center'});", elemento)
@@ -3090,54 +3090,60 @@ def exportar_pedidos_shipped_upseller(driver, pasta_download, data_inicio_custom
                             el.dispatchEvent(new MouseEvent(tipo, {bubbles: true, cancelable: true, view: window}));
                         });
                     }
-                    var el = arguments[0];
-                    disparar(el);
-                    var pai = el.closest('.ant-dropdown-trigger') || el.parentElement;
-                    if (pai) disparar(pai);
-                """, elemento)
-                time.sleep(0.3)
-                ActionChains(driver).move_to_element(elemento).pause(0.2).click().perform()
-
-                # Forçar hover via CDP (Emulation.setEmulatedMedia) não resolveu em
-                # produção — o Chrome headless da nuvem continua reportando
-                # (hover: none) mesmo assim (limitação conhecida do Chromium
-                # headless, não é só CSS). Em vez de insistir no hover, ativa por
-                # TECLADO: focar o botão e apertar Enter/Espaço dispara um clique
-                # de verdade (isTrusted) via comportamento nativo do navegador pra
-                # <button>, sem depender de hover nenhum — mecanismo totalmente
-                # diferente do clique de mouse, vale tentar em paralelo.
-                from selenium.webdriver.common.keys import Keys
-                try:
-                    driver.execute_script("arguments[0].focus();", elemento)
-                    time.sleep(0.2)
-                    ActionChains(driver).send_keys(Keys.ENTER).perform()
-                    time.sleep(0.3)
-                    ActionChains(driver).send_keys(Keys.SPACE).perform()
-                except Exception:
-                    pass
-
-                if tentar_js_tambem:
-                    time.sleep(0.4)
-                    driver.execute_script("""
-                        var el = arguments[0];
-                        el.click();
-                        var pai = el.closest('.ant-dropdown-trigger') || el.parentElement;
-                        if (pai) { pai.click(); }
-                    """, elemento)
+                    disparar(arguments[0]);
+                    if (arguments[1]) disparar(arguments[1]);
+                """, elemento, trigger)
                 return True
             except Exception:
                 return False
 
-        if not _clicar_botao_exportar():
+        def _clicar_botao_exportar(tentar_js_tambem=False):
+            """Plano B, só usado se o hover sozinho não abriu o menu: clique REAL
+            do Selenium (mover o mouse + clicar). Em retentativas
+            (tentar_js_tambem=True) também dispara um .click() JS no botão e no
+            <div> pai — cobre o caso do clique real ter sido "engolido" por um
+            overlay/re-render que já sumiu quando o JS roda."""
+            from selenium.webdriver.common.action_chains import ActionChains
+            try:
+                elemento, trigger = _achar_elemento_e_trigger()
+                if not elemento:
+                    return False
+                driver.execute_script("arguments[0].scrollIntoView({block:'center'});", elemento)
+                time.sleep(0.3)
+                ActionChains(driver).move_to_element(elemento).pause(0.2).click().perform()
+                if tentar_js_tambem:
+                    time.sleep(0.4)
+                    driver.execute_script("""
+                        arguments[0].click();
+                        if (arguments[1]) arguments[1].click();
+                    """, elemento, trigger)
+                return True
+            except Exception:
+                return False
+
+        if not _achar_elemento_e_trigger()[0]:
             return _falha("❌ Botão 'Exportar' não encontrado na tela de Pedidos Enviados")
 
         menu_aberto = False
+
+        # 1ª tentativa: só hover, sem nenhum clique no meio.
+        _hover_dropdown_trigger()
         for _tentativa in range(6):
             time.sleep(0.6)
             if _menu_exportar_aberto():
                 menu_aberto = True
                 break
 
+        # 2ª tentativa: clique de verdade (separado do hover).
+        if not menu_aberto:
+            _clicar_botao_exportar()
+            for _tentativa in range(6):
+                time.sleep(0.6)
+                if _menu_exportar_aberto():
+                    menu_aberto = True
+                    break
+
+        # 3ª tentativa: clique JS no botão e no <div> pai, como último recurso.
         if not menu_aberto:
             _clicar_botao_exportar(tentar_js_tambem=True)
             for _tentativa in range(6):
