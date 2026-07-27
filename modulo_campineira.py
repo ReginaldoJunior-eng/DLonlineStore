@@ -591,6 +591,23 @@ def imagem_parece_valida(url):
         return False
     return bool(re.search(r'/produtos/\d+/foto\d+\.\w+', url, re.IGNORECASE))
 
+@st.cache_data(ttl=120, show_spinner=False)
+def _ids_com_sku_no_historico(_client) -> set:
+    """id_produto de tudo que já tem sku_upseller marcado no histórico — usado
+    pra tirar da aba Publicar quem já foi publicado de verdade em qualquer
+    sessão passada (não só nessa). '_client' com underscore de propósito:
+    é a convenção do Streamlit pra st.cache_data pular esse argumento no
+    hashing (client do BigQuery não é hasheável)."""
+    if not _client:
+        return set()
+    try:
+        df = _client.query(
+            f"SELECT id_produto FROM `{TABLE_HISTORICO}` WHERE sku_upseller IS NOT NULL"
+        ).to_dataframe()
+        return set(df["id_produto"].astype(str))
+    except Exception:
+        return set()
+
 def filtrar_resultados(dados, filtros_cat):
     resultado = []
     for p in dados:
@@ -1917,6 +1934,15 @@ def pagina_campineira(client_bq=None):
                 cat: {"estoque_min": 70, "preco_min": 4.99} for cat in CATEGORIAS
             })
             validados = filtrar_resultados(resultados_brutos, filtros)
+
+            # Remove quem já tem SKU marcado no histórico (já publicado de
+            # verdade, em QUALQUER sessão passada) — antes essa tela só escondia
+            # quem foi publicado NESSA sessão (via session_state), então um
+            # produto publicado ontem, ou publicado agora mas que sobreviveu a
+            # um F5/reinício do app, continuava aparecendo aqui pra publicar de
+            # novo, mesmo já tendo SKU cravado no histórico.
+            ids_ja_publicados = _ids_com_sku_no_historico(client_bq_pipeline)
+            validados = [p for p in validados if str(p.get('id')) not in ids_ja_publicados]
 
             col_f1, col_f2 = st.columns(2)
             with col_f1:
