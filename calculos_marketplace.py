@@ -79,9 +79,18 @@ def calcular_venda_completo(custo_aquisicao, margem_percentual, mkt):
         lucro = preco - (preco * imposto_tax) - custo_aquisicao - custo_embalagem
         return preco, lucro
     elif mkt == "tiktok":
-        comissao_mkt, taxa_fixa = 0.12, 4.0
-        divisor = 1 - (comissao_mkt + imposto_tax + margem_alvo)
-        preco = (custo_aquisicao + custo_embalagem + taxa_fixa) / divisor if divisor > 0 else 0
+        # Por faixa de preço (igual ao Shopee acima): abaixo de R$50 é 16%+R$4,
+        # a partir de R$50 (inclusive) é 12%+R$6. Testa a faixa baixa primeiro;
+        # se o preço calculado estourar pra R$50 ou mais, recalcula com a faixa
+        # de cima — sem isso um produto na fronteira podia ficar com a taxa da
+        # faixa errada pro preço final sugerido.
+        def testar_faixa_tiktok(comis, taxa):
+            div = 1 - (comis + imposto_tax + margem_alvo)
+            return (custo_aquisicao + custo_embalagem + taxa) / div if div > 0 else 0
+        preco = testar_faixa_tiktok(0.16, 4.0)
+        if preco >= 50.0:
+            preco = testar_faixa_tiktok(0.12, 6.0)
+        comissao_mkt, taxa_fixa = (0.12, 6.0) if preco >= 50.0 else (0.16, 4.0)
         lucro = preco - (preco * comissao_mkt) - (preco * imposto_tax) - custo_aquisicao - custo_embalagem - taxa_fixa
         return preco, lucro
     return 0, 0
@@ -109,7 +118,8 @@ def calcular_lucro_realizado(preco_venda, custo_aquisicao, mkt):
         elif preco_venda <= 199.99: comissao, taxa_fixa = 0.14, 20.0
         else: comissao, taxa_fixa = 0.14, 26.0
     elif mkt == "tiktok":
-        comissao, taxa_fixa = 0.12, 4.0
+        if preco_venda >= 50.0: comissao, taxa_fixa = 0.12, 6.0
+        else: comissao, taxa_fixa = 0.16, 4.0
     else:
         # Temu (e qualquer plataforma não mapeada): sem comissão própria, só imposto.
         comissao, taxa_fixa = 0.0, 0.0

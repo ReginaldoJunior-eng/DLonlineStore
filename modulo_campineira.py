@@ -2004,9 +2004,11 @@ def pagina_campineira(client_bq=None):
 
                     with col_btn:
                         publicado = st.session_state.get(f"pub_{p.get('id')}", False)
-                        # Checkbox de seleção pra publicação em massa — só faz sentido
-                        # pra quem pode ser publicado e ainda não foi.
-                        if permitir_publicar and not publicado:
+                        # Checkbox de seleção — usada tanto pra publicação em massa
+                        # quanto pra exclusão em massa (por isso aparece mesmo pra
+                        # quem tem imagem inválida e não pode ser publicado: dá pra
+                        # selecionar e excluir vários de uma vez do mesmo jeito).
+                        if not publicado:
                             st.checkbox("Selecionar", key=f"sel_pub_{p.get('id')}", label_visibility="visible")
                         else:
                             st.markdown("<div style='padding-top:20px'></div>", unsafe_allow_html=True)
@@ -2069,6 +2071,21 @@ def pagina_campineira(client_bq=None):
             resumo_massa = st.session_state.pop("pub_massa_resumo", None)
             if resumo_massa:
                 st.success(f"✅ {resumo_massa['ok']} publicado(s) com sucesso, {resumo_massa['erro']} com erro.")
+
+            # Exclusão em massa — mesma checkbox "Selecionar" usada pra publicar,
+            # só que aqui considera as DUAS listas (com e sem imagem), já que dá
+            # pra excluir independente de poder publicar ou não.
+            selecionados_excluir = [
+                p for p in (validados_com_imagem + validados_sem_imagem)
+                if st.session_state.get(f"sel_pub_{p.get('id')}") and not st.session_state.get(f"pub_{p.get('id')}")
+            ]
+            if selecionados_excluir:
+                if st.button(f"🗑️ Excluir Selecionados ({len(selecionados_excluir)})", use_container_width=True):
+                    for p in selecionados_excluir:
+                        st.session_state["pub_excluidos"].add(p.get('id'))
+                        st.session_state[f"sel_pub_{p.get('id')}"] = False
+                    salvar_excluidos(st.session_state["pub_excluidos"], client_bq_pipeline)
+                    st.rerun()
 
             # Publicação em massa — marca "Selecionar" em vários cards e publica
             # todos de uma vez, um atrás do outro (mesma função do botão individual).
