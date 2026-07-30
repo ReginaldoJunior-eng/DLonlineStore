@@ -2057,14 +2057,7 @@ def pagina_campineira(client_bq=None):
                     for idx, p in enumerate(validados_sem_imagem):
                         _renderizar_card_pendente(p, f"semimg_{idx}", permitir_publicar=False)
 
-            col_inf, col_rest = st.columns([3,1])
-            with col_inf:
-                st.info(f"**{len(validados_com_imagem)}** produtos prontos para publicar")
-            with col_rest:
-                if excluidos and st.button("↩️ Restaurar removidos", use_container_width=True):
-                    st.session_state["pub_excluidos"] = set()
-                    salvar_excluidos(set(), client_bq_pipeline)
-                    st.rerun()
+            st.info(f"**{len(validados_com_imagem)}** produtos prontos para publicar")
 
             # Resultado da ÚLTIMA publicação em massa, de forma persistente — o
             # log ao vivo (linhas_log) some no rerun do final do laço, senão.
