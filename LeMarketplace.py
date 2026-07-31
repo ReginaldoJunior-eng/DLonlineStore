@@ -1315,126 +1315,134 @@ elif st.session_state.pg == "Dashboard":
 
             meta_mensal = _ler_meta_mensal()
 
-            col_meta, col_chart = st.columns([1, 3])
-            with col_meta:
+            # "Meta do Mês" numa faixa fina em cima (não mais numa coluna lateral
+            # ocupando 1/4 da tela à toa) — o gráfico "Receita Operacional" agora
+            # usa a largura inteira, que é o que sobrava vazio antes.
+            with st.container(border=True):
                 st.markdown("**🎯 Meta do Mês**")
-                if meta_mensal > 0:
-                    pct_meta = min(100, fat_mes / meta_mensal * 100)
-                    fig_meta = go.Figure(go.Pie(
-                        values=[pct_meta, max(0, 100 - pct_meta)],
-                        hole=0.75, sort=False, direction='clockwise',
-                        marker=dict(colors=['#FBBF24', '#F3F1EA']),
-                        textinfo='none', hoverinfo='skip',
-                    ))
-                    fig_meta.update_layout(
-                        showlegend=False, margin=dict(l=0, r=0, t=0, b=0), height=150,
-                        paper_bgcolor='rgba(0,0,0,0)',
-                        annotations=[dict(text=f"{pct_meta:.0f}%", x=0.5, y=0.5, font_size=22, showarrow=False)]
-                    )
-                    st.plotly_chart(fig_meta, use_container_width=True, config={'displayModeBar': False})
-                    st.caption(f"R$ {fat_mes:,.2f} de R$ {meta_mensal:,.2f}")
-                else:
-                    st.info("Meta não definida ainda.")
+                col_pizza, col_meta_info, col_meta_btn = st.columns([1, 3, 2])
+                with col_pizza:
+                    if meta_mensal > 0:
+                        pct_meta = min(100, fat_mes / meta_mensal * 100)
+                        fig_meta = go.Figure(go.Pie(
+                            values=[pct_meta, max(0, 100 - pct_meta)],
+                            hole=0.75, sort=False, direction='clockwise',
+                            marker=dict(colors=['#FBBF24', '#F3F1EA']),
+                            textinfo='none', hoverinfo='skip',
+                        ))
+                        fig_meta.update_layout(
+                            showlegend=False, margin=dict(l=0, r=0, t=0, b=0), height=100,
+                            paper_bgcolor='rgba(0,0,0,0)',
+                            annotations=[dict(text=f"{pct_meta:.0f}%", x=0.5, y=0.5, font_size=18, showarrow=False)]
+                        )
+                        st.plotly_chart(fig_meta, use_container_width=True, config={'displayModeBar': False})
+                with col_meta_info:
+                    if meta_mensal > 0:
+                        st.markdown(f"R$ {fat_mes:,.2f} de R$ {meta_mensal:,.2f}")
+                    else:
+                        st.info("Meta não definida ainda.")
 
-                if "dash_editar_meta" not in st.session_state:
-                    st.session_state["dash_editar_meta"] = False
-                if st.button("✏️ Editar meta", key="btn_editar_meta", use_container_width=True):
-                    st.session_state["dash_editar_meta"] = not st.session_state["dash_editar_meta"]
-                if st.session_state["dash_editar_meta"]:
-                    nova_meta = st.number_input(
-                        "Meta mensal (R$)", min_value=0.0, step=100.0,
-                        value=float(meta_mensal), key="input_nova_meta"
-                    )
-                    if st.button("💾 Salvar meta", key="btn_salvar_meta", use_container_width=True):
-                        _salvar_meta_mensal(nova_meta)
+                    if "dash_editar_meta" not in st.session_state:
                         st.session_state["dash_editar_meta"] = False
+                    if st.session_state["dash_editar_meta"]:
+                        nova_meta = st.number_input(
+                            "Meta mensal (R$)", min_value=0.0, step=100.0,
+                            value=float(meta_mensal), key="input_nova_meta"
+                        )
+                        if st.button("💾 Salvar meta", key="btn_salvar_meta"):
+                            _salvar_meta_mensal(nova_meta)
+                            st.session_state["dash_editar_meta"] = False
+                            st.rerun()
+                with col_meta_btn:
+                    st.markdown("<div style='padding-top:8px'></div>", unsafe_allow_html=True)
+                    if st.button("✏️ Editar meta", key="btn_editar_meta", use_container_width=True):
+                        st.session_state["dash_editar_meta"] = not st.session_state["dash_editar_meta"]
                         st.rerun()
 
-            with col_chart:
-                st.markdown("**📈 Receita Operacional**")
-                if "dash_visao" not in st.session_state:
+            st.markdown("**📈 Receita Operacional**")
+            if "dash_visao" not in st.session_state:
+                st.session_state["dash_visao"] = "Mensal"
+            cb1, cb2, _sp = st.columns([1, 1, 4])
+            with cb1:
+                if st.button("Mensal", key="btn_visao_mensal", use_container_width=True,
+                             type="primary" if st.session_state["dash_visao"] == "Mensal" else "secondary"):
                     st.session_state["dash_visao"] = "Mensal"
-                cb1, cb2, _sp = st.columns([1, 1, 4])
-                with cb1:
-                    if st.button("Mensal", key="btn_visao_mensal", use_container_width=True,
-                                 type="primary" if st.session_state["dash_visao"] == "Mensal" else "secondary"):
-                        st.session_state["dash_visao"] = "Mensal"
-                        st.rerun()
-                with cb2:
-                    if st.button("Diário", key="btn_visao_diario", use_container_width=True,
-                                 type="primary" if st.session_state["dash_visao"] == "Diário" else "secondary"):
-                        st.session_state["dash_visao"] = "Diário"
-                        st.rerun()
+                    st.rerun()
+            with cb2:
+                if st.button("Diário", key="btn_visao_diario", use_container_width=True,
+                             type="primary" if st.session_state["dash_visao"] == "Diário" else "secondary"):
+                    st.session_state["dash_visao"] = "Diário"
+                    st.rerun()
 
-                if st.session_state["dash_visao"] == "Mensal":
-                    # Só os meses — poucos, cabe tudo com folga (sem misturar dia
-                    # nenhum aqui, diferente do gráfico antigo).
-                    df_plot = df_vendas.groupby('Mes_Ref').agg(
-                        {'Faturamento': 'sum', 'Lucro Total': 'sum', 'Custo': 'sum', 'Quantidade': 'sum'}
-                    ).reset_index().sort_values('Mes_Ref')
-                    df_plot['Data_Label'] = df_plot['Mes_Ref'].apply(
-                        lambda m: meses_map[int(m.split('-')[1])] + '/' + m.split('-')[0][-2:]
-                    )
-                else:
-                    # Isola um mês por vez — só os dias dele, sem misturar mês fechado.
-                    # Botões em vez de selectbox — mesmo visual de aba usado no resto do app.
-                    opcoes_meses = sorted(df_vendas['Mes_Ref'].unique(), reverse=True)
-                    if "dash_mes_diario" not in st.session_state or st.session_state["dash_mes_diario"] not in opcoes_meses:
-                        st.session_state["dash_mes_diario"] = opcoes_meses[0]
-                    cols_meses = st.columns(len(opcoes_meses))
-                    for col_m, m in zip(cols_meses, opcoes_meses):
-                        with col_m:
-                            label_m = meses_map[int(m.split('-')[1])] + '/' + m.split('-')[0][-2:]
-                            if st.button(label_m, key=f"btn_mes_{m}", use_container_width=True,
-                                         type="primary" if st.session_state["dash_mes_diario"] == m else "secondary"):
-                                st.session_state["dash_mes_diario"] = m
-                                st.rerun()
-                    mes_detalhe = st.session_state["dash_mes_diario"]
-                    df_dia = df_vendas[df_vendas['Mes_Ref'] == mes_detalhe]
-                    df_plot = df_dia.groupby('Data').agg(
-                        {'Faturamento': 'sum', 'Lucro Total': 'sum', 'Custo': 'sum', 'Quantidade': 'sum'}
-                    ).reset_index().sort_values('Data')
-                    df_plot['Data_Label'] = df_plot['Data'].dt.strftime('%d/%m')
-
-                fig = make_subplots(specs=[[{"secondary_y": True}]])
-                fig.add_trace(go.Bar(
-                    x=df_plot['Data_Label'], y=df_plot['Custo'], name='Custo',
-                    marker_color='#FEF3C7', hovertemplate='R$ %{y:,.2f}<extra></extra>'
-                ), secondary_y=False)
-                fig.add_trace(go.Bar(
-                    x=df_plot['Data_Label'], y=df_plot['Lucro Total'], name='Lucro Líquido',
-                    marker_color='#FBBF24', hovertemplate='R$ %{y:,.2f}<extra></extra>',
-                    text=df_plot['Lucro Total'].apply(lambda x: f'R$ {x:,.2f}'),
-                    textposition='outside', textfont=dict(size=12, color='#92400E', family="Arial")
-                ), secondary_y=False)
-                # Qtd Vendas na escala PRÓPRIA (secondary_y independente, não a mesma
-                # do R$) — é o que fazia a linha flutuar acima das barras antes, em
-                # vez de ficar "colada" em cima (Faturamento é sempre = topo da
-                # barra empilhada, então uma linha de Faturamento sempre encosta nela).
-                fig.add_trace(go.Scatter(
-                    x=df_plot['Data_Label'], y=df_plot['Quantidade'], name='Qtd Vendas',
-                    mode='lines+markers+text',
-                    line=dict(color='#6366F1', width=3), marker=dict(size=8, color='#6366F1'),
-                    text=df_plot['Quantidade'], textposition="top center",
-                    textfont=dict(size=11, color='#6366F1', family="Arial"),
-                    hovertemplate='Vendas: %{y}<extra></extra>'
-                ), secondary_y=True)
-
-                fig.update_layout(
-                    barmode='stack',
-                    paper_bgcolor='rgba(0,0,0,0)',
-                    plot_bgcolor='rgba(0,0,0,0)',
-                    yaxis=dict(showgrid=False, zeroline=False, showticklabels=False, fixedrange=True,
-                               range=[0, df_plot['Faturamento'].max() * 2.2]),
-                    yaxis2=dict(showgrid=False, zeroline=False, showticklabels=False, fixedrange=True,
-                                range=[df_plot['Quantidade'].max() * -1.5, df_plot['Quantidade'].max() * 1.2]),
-                    xaxis=dict(title="Competência / Dias", showgrid=False, showline=True, linecolor='#E5E7EB',
-                               tickfont=dict(color='#6B7280', size=12)),
-                    legend=dict(orientation="h", yanchor="bottom", y=1.1, xanchor="center", x=0.5, font=dict(color="#374151", size=13)),
-                    margin=dict(l=10, r=10, t=80, b=60),
-                    hovermode='x unified',
+            if st.session_state["dash_visao"] == "Mensal":
+                # Só os meses — poucos, cabe tudo com folga (sem misturar dia
+                # nenhum aqui, diferente do gráfico antigo).
+                df_plot = df_vendas.groupby('Mes_Ref').agg(
+                    {'Faturamento': 'sum', 'Lucro Total': 'sum', 'Custo': 'sum', 'Quantidade': 'sum'}
+                ).reset_index().sort_values('Mes_Ref')
+                df_plot['Data_Label'] = df_plot['Mes_Ref'].apply(
+                    lambda m: meses_map[int(m.split('-')[1])] + '/' + m.split('-')[0][-2:]
                 )
-                st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
+            else:
+                # Isola um mês por vez — só os dias dele, sem misturar mês fechado.
+                # Botões em vez de selectbox — mesmo visual de aba usado no resto do app.
+                opcoes_meses = sorted(df_vendas['Mes_Ref'].unique(), reverse=True)
+                if "dash_mes_diario" not in st.session_state or st.session_state["dash_mes_diario"] not in opcoes_meses:
+                    st.session_state["dash_mes_diario"] = opcoes_meses[0]
+                cols_meses = st.columns(len(opcoes_meses))
+                for col_m, m in zip(cols_meses, opcoes_meses):
+                    with col_m:
+                        label_m = meses_map[int(m.split('-')[1])] + '/' + m.split('-')[0][-2:]
+                        if st.button(label_m, key=f"btn_mes_{m}", use_container_width=True,
+                                     type="primary" if st.session_state["dash_mes_diario"] == m else "secondary"):
+                            st.session_state["dash_mes_diario"] = m
+                            st.rerun()
+                mes_detalhe = st.session_state["dash_mes_diario"]
+                df_dia = df_vendas[df_vendas['Mes_Ref'] == mes_detalhe]
+                df_plot = df_dia.groupby('Data').agg(
+                    {'Faturamento': 'sum', 'Lucro Total': 'sum', 'Custo': 'sum', 'Quantidade': 'sum'}
+                ).reset_index().sort_values('Data')
+                df_plot['Data_Label'] = df_plot['Data'].dt.strftime('%d/%m')
+
+            fig = make_subplots(specs=[[{"secondary_y": True}]])
+            fig.add_trace(go.Bar(
+                x=df_plot['Data_Label'], y=df_plot['Custo'], name='Custo',
+                marker_color='#FEF3C7', hovertemplate='R$ %{y:,.2f}<extra></extra>'
+            ), secondary_y=False)
+            fig.add_trace(go.Bar(
+                x=df_plot['Data_Label'], y=df_plot['Lucro Total'], name='Lucro Líquido',
+                marker_color='#FBBF24', hovertemplate='R$ %{y:,.2f}<extra></extra>',
+                text=df_plot['Lucro Total'].apply(lambda x: f'R$ {x:,.2f}'),
+                textposition='outside', textfont=dict(size=12, color='#92400E', family="Arial")
+            ), secondary_y=False)
+            # Qtd Vendas na escala PRÓPRIA (secondary_y independente, não a mesma
+            # do R$) — é o que fazia a linha flutuar acima das barras antes, em
+            # vez de ficar "colada" em cima (Faturamento é sempre = topo da
+            # barra empilhada, então uma linha de Faturamento sempre encosta nela).
+            fig.add_trace(go.Scatter(
+                x=df_plot['Data_Label'], y=df_plot['Quantidade'], name='Qtd Vendas',
+                mode='lines+markers+text',
+                line=dict(color='#6366F1', width=3), marker=dict(size=8, color='#6366F1'),
+                text=df_plot['Quantidade'], textposition="top center",
+                textfont=dict(size=11, color='#6366F1', family="Arial"),
+                hovertemplate='Vendas: %{y}<extra></extra>'
+            ), secondary_y=True)
+
+            fig.update_layout(
+                barmode='stack',
+                paper_bgcolor='rgba(0,0,0,0)',
+                plot_bgcolor='rgba(0,0,0,0)',
+                yaxis=dict(showgrid=False, zeroline=False, showticklabels=False, fixedrange=True,
+                           range=[0, df_plot['Faturamento'].max() * 2.2]),
+                yaxis2=dict(showgrid=False, zeroline=False, showticklabels=False, fixedrange=True,
+                            range=[df_plot['Quantidade'].max() * -1.5, df_plot['Quantidade'].max() * 1.2]),
+                xaxis=dict(title="Competência / Dias", showgrid=False, showline=True, linecolor='#E5E7EB',
+                           tickfont=dict(color='#6B7280', size=12)),
+                legend=dict(orientation="h", yanchor="bottom", y=1.1, xanchor="center", x=0.5, font=dict(color="#374151", size=13)),
+                margin=dict(l=10, r=10, t=80, b=60),
+                hovermode='x unified',
+            )
+            st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
 
             st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
             st.markdown('<h3>📊 Totais Acumulados</h3>', unsafe_allow_html=True)
