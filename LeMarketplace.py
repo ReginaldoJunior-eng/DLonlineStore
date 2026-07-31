@@ -1413,7 +1413,7 @@ elif st.session_state.pg == "Dashboard":
                 x=df_plot['Data_Label'], y=df_plot['Lucro Total'], name='Lucro Líquido',
                 marker_color='#FBBF24', hovertemplate='R$ %{y:,.2f}<extra></extra>',
                 text=df_plot['Lucro Total'].apply(lambda x: f'R$ {x:,.2f}'),
-                textposition='outside', textfont=dict(size=12, color='#92400E', family="Arial")
+                textposition='outside', textfont=dict(size=15, color='#92400E', family="Arial")
             ), secondary_y=False)
             # Qtd Vendas na escala PRÓPRIA (secondary_y independente, não a mesma
             # do R$) — é o que fazia a linha flutuar acima das barras antes, em
@@ -1424,7 +1424,7 @@ elif st.session_state.pg == "Dashboard":
                 mode='lines+markers+text',
                 line=dict(color='#6366F1', width=3), marker=dict(size=8, color='#6366F1'),
                 text=df_plot['Quantidade'], textposition="top center",
-                textfont=dict(size=11, color='#6366F1', family="Arial"),
+                textfont=dict(size=14, color='#6366F1', family="Arial"),
                 hovertemplate='Vendas: %{y}<extra></extra>'
             ), secondary_y=True)
 
