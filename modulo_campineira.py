@@ -863,23 +863,6 @@ def rodar_rpa_background(filtros_cat, cats_varrer=None, buscar_detalhes=False,
                                   f"— salvando apenas no JSON local.")
         bq_erro_reportado = [False]
 
-        # IDs já publicados no Armazém — pulamos esses na captura pra não ficar
-        # reprocessando/re-adicionando na fila quem já foi publicado. Produtos
-        # ainda não publicados continuam sendo recapturados normalmente (atualiza
-        # preço, estoque, imagem etc.). Pra corrigir dado de algo já publicado,
-        # usa os botões "Reprocessar" na aba Publicar, não a varredura.
-        ids_ja_publicados = set()
-        if client_bq_camp:
-            try:
-                q_publicados = f"""
-                    SELECT DISTINCT id_produto FROM `{TABLE_PIPELINE}`
-                    WHERE etapa = 'armazem' AND status = 'ok'
-                """
-                df_publicados = client_bq_camp.query(q_publicados).to_dataframe()
-                ids_ja_publicados = set(df_publicados["id_produto"].tolist())
-            except Exception:
-                ids_ja_publicados = set()
-
         salvar_status({"rodando": True, "progresso": progresso_inicial,
                        "inicio": inicio_dt.strftime("%d/%m/%Y %H:%M:%S"),
                        "inicio_ts": inicio_dt.timestamp(),
@@ -1148,11 +1131,14 @@ def rodar_rpa_background(filtros_cat, cats_varrer=None, buscar_detalhes=False,
                                 detalhes.pop("imagem_produto")
                             produto_final = {**p, "categoria": nome_cat, **detalhes}
 
-                            # Pula produtos já publicados no Armazém — evita reprocessar/
-                            # readicionar na fila quem já foi publicado (pra corrigir dados
-                            # de um já publicado, usa "Reprocessar" na aba Publicar).
-                            if produto_final.get("id") in ids_ja_publicados:
-                                continue
+                            # Já publicado no Armazém (tem SKU) não volta pra fila de
+                            # publicar — a aba Publicar já filtra isso sozinha por
+                            # _ids_com_sku_no_historico(), então NÃO precisa pular aqui.
+                            # Pelo contrário: continua registrando normalmente, pra que
+                            # estoque/preço/foto desse produto sejam atualizados no
+                            # histórico permanente a cada varredura, mesmo já publicado
+                            # — antes disso, um produto publicado nunca mais tinha o
+                            # histórico atualizado (só via "🔄 Reprocessar" manual).
 
                             todos_produtos.append(produto_final)
                             buffer_checkpoint.append(produto_final)
