@@ -796,18 +796,24 @@ def processar_e_enviar_imagem(driver, imagem_url):
         imagem_url = "https://campineira.com.br" + imagem_url
 
     try:
-        import requests
+        from curl_cffi import requests as cf_requests
         import tempfile
         import uuid as _uuid
         from selenium.webdriver.common.by import By
         from PIL import Image as PILImage
 
-        # Baixa a imagem localmente (contorna bloqueio CORS)
+        # Baixa a imagem localmente (contorna bloqueio CORS). curl_cffi (não
+        # requests) — confirmado em produção que a Campineira passou a
+        # bloquear pelo "fingerprint" TLS da conexão: a mesma URL com os
+        # mesmos headers funciona no PowerShell/.NET e é recusada (conexão
+        # derrubada sem resposta) pela biblioteca requests do Python. Esse
+        # bloqueio silencioso é o motivo de publicações recentes terem saído
+        # sem foto. curl_cffi imita o TLS de um Chrome de verdade e passa.
         headers = {
             "User-Agent": "Mozilla/5.0",
             "Referer": "https://campineira.com.br/"
         }
-        resp = requests.get(imagem_url, headers=headers, timeout=10)
+        resp = cf_requests.get(imagem_url, headers=headers, timeout=10, impersonate="chrome")
         if resp.status_code != 200:
             return f"falha ao baixar (HTTP {resp.status_code})"
 

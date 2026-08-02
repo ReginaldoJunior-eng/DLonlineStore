@@ -196,13 +196,19 @@ def carregar_imagem_bytes(url):
     no Streamlit. st.image(url) direto deixa o NAVEGADOR buscar a imagem, sem esse
     header — a Campineira bloqueia esse acesso (proteção contra hotlink) e a
     miniatura aparece quebrada mesmo com a URL certa. Cacheado por 1h pra não
-    rebaixar a mesma imagem a cada rerun da tela."""
+    rebaixar a mesma imagem a cada rerun da tela.
+
+    Usa curl_cffi (não requests) — confirmado em produção que a Campineira
+    passou a bloquear pelo "fingerprint" TLS da conexão, não só pelos headers:
+    a mesma URL, com os mesmos headers, funciona no PowerShell/.NET e é
+    recusada (conexão derrubada sem resposta nenhuma) pela biblioteca requests
+    do Python. curl_cffi imita o TLS de um Chrome de verdade e passa."""
     if not url:
         return None
     try:
-        import requests
+        from curl_cffi import requests as cf_requests
         headers = {"User-Agent": "Mozilla/5.0", "Referer": "https://campineira.com.br/"}
-        resp = requests.get(url, headers=headers, timeout=8)
+        resp = cf_requests.get(url, headers=headers, timeout=8, impersonate="chrome")
         if resp.status_code == 200:
             return resp.content
         return None

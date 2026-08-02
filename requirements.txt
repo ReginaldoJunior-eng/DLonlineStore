@@ -10,4 +10,5 @@ selenium
 webdriver-manager
 Pillow
 requests
+curl_cffi
 PyVirtualDisplay
