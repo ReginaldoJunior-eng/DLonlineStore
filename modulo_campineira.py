@@ -2042,6 +2042,16 @@ def pagina_campineira(client_bq=None):
         # nunca chegaram a ser criados. Reconstrói os dados a partir do BigQuery e
         # tenta publicar de novo do zero (gera um SKU novo).
         produtos_armazem_com_erro = listar_produtos_armazem_com_erro(client_bq_img)
+        # Tira quem foi excluído manualmente (mesma lista de exclusão da fila de
+        # Publicar, tb_campineira_excluidos) — alguns erros (EAN/SKU já existe)
+        # são definitivos: o produto já foi publicado antes por outro caminho, e
+        # reprocessar só vai repetir o mesmo erro pra sempre. Sem uma forma de
+        # dispensar, esses ficavam presos aqui indefinidamente.
+        _excluidos_erro = st.session_state.get("pub_excluidos", set())
+        produtos_armazem_com_erro = [
+            item for item in produtos_armazem_com_erro
+            if str(item["id_produto"]) not in {str(x) for x in _excluidos_erro}
+        ]
         if produtos_armazem_com_erro:
             if "reproc_arm_aberto" not in st.session_state:
                 st.session_state["reproc_arm_aberto"] = False
@@ -2054,13 +2064,13 @@ def pagina_campineira(client_bq=None):
                 for item in produtos_armazem_com_erro:
                     id_item = item["id_produto"]
                     with st.container(border=True):
-                        col_info, col_btn = st.columns([4, 1])
+                        col_info, col_btn1, col_btn2 = st.columns([4, 1, 1])
                         with col_info:
                             st.markdown(f"**{item['nome']}**")
                             st.caption(f"{item.get('categoria', '')} — {item['mensagem']}")
                             if not item.get("produto"):
                                 st.caption("⚠️ Não foi possível recuperar os dados completos do produto no BigQuery.")
-                        with col_btn:
+                        with col_btn1:
                             if not item.get("produto"):
                                 st.button("🔄 Reprocessar", key=f"reproc_arm_{id_item}", disabled=True,
                                           use_container_width=True, help="Dados do produto não encontrados")
@@ -2080,6 +2090,16 @@ def pagina_campineira(client_bq=None):
                                         st.success(msg_arm)
                                     else:
                                         st.error(msg_arm)
+                        with col_btn2:
+                            # Alguns erros (EAN/SKU já existe) são definitivos — o
+                            # produto já foi publicado antes por outro caminho, e
+                            # reprocessar só repete o mesmo erro pra sempre. Excluir
+                            # tira daqui (mesma lista de exclusão da fila de Publicar).
+                            if st.button("🗑️ Excluir", key=f"excluir_arm_{id_item}", use_container_width=True,
+                                         help="Remove esse produto dessa lista — não tenta mais reprocessar"):
+                                st.session_state["pub_excluidos"].add(str(id_item))
+                                salvar_excluidos(st.session_state["pub_excluidos"], client_bq_img)
+                                st.rerun()
 
         st.markdown("---")
         st.markdown("### 📦 Produtos Validados para Publicar")
