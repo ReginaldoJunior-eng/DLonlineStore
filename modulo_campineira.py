@@ -301,6 +301,13 @@ def baixar_imagem_bytes_bruto(url):
     (que roda numa thread separada, ver conectar_bigquery_rpa) quanto no backfill.
     curl_cffi (não requests) pelo mesmo motivo de carregar_imagem_bytes: a
     Campineira bloqueia pelo fingerprint TLS da conexão, não só pelos headers.
+
+    ATENÇÃO: confirmado que a Campineira reforçou a proteção pra um nível que
+    nem o curl_cffi passa mais ("HTTP/2 stream reset by server" — visto tanto
+    local quanto na nuvem). Preferir _baixar_imagem_via_driver() (usa o Chrome de
+    verdade da varredura) sempre que houver um driver Selenium disponível; essa
+    função aqui fica só como fallback pra quando não tem driver (ex: backfill
+    standalone), útil se a Campineira afrouxar a proteção de novo no futuro.
     Retorna (bytes, erro) — erro None se deu certo."""
     if not url:
         return None, "sem URL"
@@ -314,7 +321,45 @@ def baixar_imagem_bytes_bruto(url):
     except Exception as e:
         return None, f"{type(e).__name__}: {str(e)[:150]}"
 
-def atualizar_historico_bq(client, produtos):
+_SCRIPT_FETCH_IMAGEM = """
+var callback = arguments[arguments.length - 1];
+var url = arguments[0];
+fetch(url, {credentials: "include"}).then(function(resp) {
+    if (!resp.ok) { callback({erro: "HTTP " + resp.status}); return null; }
+    return resp.blob();
+}).then(function(blob) {
+    if (!blob) return;
+    var reader = new FileReader();
+    reader.onloadend = function() { callback({dataurl: reader.result}); };
+    reader.onerror = function() { callback({erro: "FileReader falhou"}); };
+    reader.readAsDataURL(blob);
+}).catch(function(e) { callback({erro: String(e)}); });
+"""
+
+def _baixar_imagem_via_driver(driver, url, timeout=10):
+    """Baixa os bytes de uma imagem usando fetch() DENTRO do próprio navegador
+    Selenium que já está navegando na Campineira — em vez de um cliente HTTP
+    Python (requests/curl_cffi) tentando imitar um navegador. Como o pedido sai
+    de um Chrome de verdade, na mesma aba/origem já carregada, passa em
+    qualquer verificação de fingerprint TLS/HTTP2 e leva os cookies da sessão
+    automaticamente (fetch same-origin). É a única forma que continuou
+    funcionando depois que a Campineira reforçou a proteção contra hotlink/bot
+    (curl_cffi passou a apanhar com 'HTTP/2 stream reset by server').
+    Retorna (bytes, erro)."""
+    if not driver or not url:
+        return None, "sem driver ou URL"
+    try:
+        driver.set_script_timeout(timeout)
+        resultado = driver.execute_async_script(_SCRIPT_FETCH_IMAGEM, url)
+        if resultado and resultado.get("dataurl"):
+            import base64
+            b64 = resultado["dataurl"].split(",", 1)[1]
+            return base64.b64decode(b64), None
+        return None, (resultado or {}).get("erro", "sem resposta do navegador")
+    except Exception as e:
+        return None, f"{type(e).__name__}: {str(e)[:150]}"
+
+def atualizar_historico_bq(client, produtos, driver=None):
     """Registra/atualiza o histórico PERMANENTE de produtos lidos da Campineira —
     diferente do 'Resultados' (que é só a foto da última varredura), esse histórico
     nunca é sobrescrito. Cada produto só tem estoque/preço ATUALIZADOS se algo
@@ -327,10 +372,20 @@ def atualizar_historico_bq(client, produtos):
     direto (hotlink) que a tela de Histórico fazia pelo navegador do usuário, além
     do bloqueio por TLS fingerprint que já pegava os downloads feitos em Python.
     Guardando os bytes de verdade uma vez, aqui, o produto nunca mais depende da
-    Campineira liberar a imagem de novo pra continuar aparecendo. Download em
-    paralelo (poucos workers) pra não esticar demais o checkpoint, e best-effort:
-    se a imagem falhar, guarda NULL e o MERGE abaixo preserva um valor já
-    existente (não apaga uma foto boa por causa de uma falha passageira).
+    Campineira liberar a imagem de novo pra continuar aparecendo.
+
+    'driver' (opcional): se veio um driver Selenium (a varredura já está com o
+    Chrome aberto na Campineira), baixa cada foto usando o PRÓPRIO navegador
+    (_baixar_imagem_via_driver) em vez de um cliente HTTP em Python — confirmado
+    que a Campineira reforçou a proteção a ponto do curl_cffi também apanhar
+    ("HTTP/2 stream reset by server", tanto local quanto na nuvem); um Chrome de
+    verdade passa porque não está imitando nada. Sequencial (não dá pra rodar o
+    mesmo driver em paralelo). Sem driver, cai no download via curl_cffi
+    (paralelo, poucos workers) — mantido como fallback caso a Campineira
+    afrouxe a proteção de novo, e é o único caminho possível fora de uma
+    varredura (ex: backfill). Best-effort: se a imagem falhar, guarda NULL e o
+    MERGE abaixo preserva um valor já existente (não apaga uma foto boa por
+    causa de uma falha passageira).
 
     Usa uma tabela de staging (sobrescrita a cada chamada, WRITE_TRUNCATE) + um
     único MERGE pra cuidar de tudo de uma vez, em vez de 1 query por produto —
@@ -366,12 +421,17 @@ def atualizar_historico_bq(client, produtos):
         if not linhas:
             return False, "nenhum produto com id válido"
 
-        with ThreadPoolExecutor(max_workers=4) as pool:
-            imagens_bytes = list(pool.map(
-                lambda l: baixar_imagem_bytes_bruto(l["imagem"])[0], linhas
-            ))
-        for linha, img_bytes in zip(linhas, imagens_bytes):
-            linha["imagem_bytes"] = img_bytes
+        if driver is not None:
+            for linha in linhas:
+                img_bytes, _erro = _baixar_imagem_via_driver(driver, linha["imagem"])
+                linha["imagem_bytes"] = img_bytes
+        else:
+            with ThreadPoolExecutor(max_workers=4) as pool:
+                imagens_bytes = list(pool.map(
+                    lambda l: baixar_imagem_bytes_bruto(l["imagem"])[0], linhas
+                ))
+            for linha, img_bytes in zip(linhas, imagens_bytes):
+                linha["imagem_bytes"] = img_bytes
 
         df_stage = pd.DataFrame(linhas)
         job_config = bigquery.LoadJobConfig(
@@ -895,7 +955,7 @@ def rodar_rpa_background(filtros_cat, cats_varrer=None, buscar_detalhes=False,
                 nonlocal buffer_checkpoint, paginas_desde_ultimo_checkpoint
                 if not buffer_checkpoint:
                     return
-                ok_hist, erro_hist = atualizar_historico_bq(client_bq_camp, buffer_checkpoint)
+                ok_hist, erro_hist = atualizar_historico_bq(client_bq_camp, buffer_checkpoint, driver=driver)
                 if not ok_hist:
                     atualizar(f"⚠️ Falha ao gravar checkpoint no histórico: {erro_hist}")
                 buffer_checkpoint = []
@@ -1909,12 +1969,13 @@ def pagina_campineira(client_bq=None):
                 # varredura); só cai pra URL crua (que pode ou não funcionar,
                 # dependendo do navegador de quem está vendo) se ainda não tiver.
                 import base64 as _base64
+                import numpy as _np
                 _imagens_hist_res = _buscar_imagens_bytes_historico(client_bq_pipeline, df_show["ID"].tolist())
                 def _foto_datauri_ou_url(row):
                     b = _imagens_hist_res.get(str(row["ID"]))
                     if b:
                         return f"data:image/jpeg;base64,{_base64.b64encode(b).decode()}"
-                    return row["Imagem"] if row["Imagem"] and str(row["Imagem"]).startswith("http") else None
+                    return row["Imagem"] if row["Imagem"] and str(row["Imagem"]).startswith("http") else _np.nan
                 df_show["Imagem"] = df_show.apply(_foto_datauri_ou_url, axis=1)
                 df_show = df_show.drop(columns=["ID"])
                 st.dataframe(df_show, use_container_width=True, hide_index=True,
@@ -2279,13 +2340,14 @@ def pagina_campineira(client_bq=None):
                 # que passamos a guardar isso, ou falhou o download) fica sem foto em
                 # vez de mostrar o ícone quebrado.
                 import base64 as _base64
+                import numpy as _np
                 if "imagem_bytes" in df_hist.columns:
                     df_hist["Foto_datauri"] = df_hist["imagem_bytes"].apply(
                         lambda b: f"data:image/jpeg;base64,{_base64.b64encode(b).decode()}"
-                        if isinstance(b, (bytes, bytearray)) and b else None
+                        if isinstance(b, (bytes, bytearray)) and b else _np.nan
                     )
                 else:
-                    df_hist["Foto_datauri"] = None
+                    df_hist["Foto_datauri"] = _np.nan
 
                 total = len(df_hist)
                 publicados = int(df_hist["sku_upseller"].notna().sum())
