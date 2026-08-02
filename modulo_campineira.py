@@ -211,8 +211,20 @@ def carregar_imagem_bytes(url):
         resp = cf_requests.get(url, headers=headers, timeout=8, impersonate="chrome")
         if resp.status_code == 200:
             return resp.content
+        # Guarda o motivo real da falha (não só um None mudo) — sem isso não
+        # dava pra saber se o bloqueio era de TLS, IP do datacenter da nuvem,
+        # timeout, etc. Só a ÚLTIMA falha da sessão (não empilha um log
+        # gigante), mostrada na tela de quem chamar essa função.
+        try:
+            st.session_state["_ultimo_erro_imagem"] = f"HTTP {resp.status_code} — {url}"
+        except Exception:
+            pass
         return None
-    except Exception:
+    except Exception as e:
+        try:
+            st.session_state["_ultimo_erro_imagem"] = f"{type(e).__name__}: {str(e)[:200]} — {url}"
+        except Exception:
+            pass
         return None
 
 MARGEM_PADRAO = 15.0
@@ -283,6 +295,25 @@ def registrar_sku_bq(client, sku, ean, id_produto, nome):
     except Exception as e:
         return False, str(e)[:300]
 
+def baixar_imagem_bytes_bruto(url):
+    """Baixa os bytes de uma imagem da Campineira sem depender do Streamlit (sem
+    st.cache_data, sem st.session_state) — usada tanto no checkpoint da varredura
+    (que roda numa thread separada, ver conectar_bigquery_rpa) quanto no backfill.
+    curl_cffi (não requests) pelo mesmo motivo de carregar_imagem_bytes: a
+    Campineira bloqueia pelo fingerprint TLS da conexão, não só pelos headers.
+    Retorna (bytes, erro) — erro None se deu certo."""
+    if not url:
+        return None, "sem URL"
+    try:
+        from curl_cffi import requests as cf_requests
+        headers = {"User-Agent": "Mozilla/5.0", "Referer": "https://campineira.com.br/"}
+        resp = cf_requests.get(url, headers=headers, timeout=8, impersonate="chrome")
+        if resp.status_code == 200 and resp.content:
+            return resp.content, None
+        return None, f"HTTP {resp.status_code}"
+    except Exception as e:
+        return None, f"{type(e).__name__}: {str(e)[:150]}"
+
 def atualizar_historico_bq(client, produtos):
     """Registra/atualiza o histórico PERMANENTE de produtos lidos da Campineira —
     diferente do 'Resultados' (que é só a foto da última varredura), esse histórico
@@ -290,6 +321,16 @@ def atualizar_historico_bq(client, produtos):
     realmente mudou desde a última leitura; senão fica intocado. Produto novo entra
     como linha nova. O SKU (quando publicado) nunca é tocado por essa função — só
     por marcar_sku_historico_bq(), então sobrevive de varredura em varredura.
+
+    Também baixa e grava o BYTES da foto (coluna imagem_bytes) de cada produto do
+    lote — antes só guardávamos a URL, e a Campineira passou a bloquear o acesso
+    direto (hotlink) que a tela de Histórico fazia pelo navegador do usuário, além
+    do bloqueio por TLS fingerprint que já pegava os downloads feitos em Python.
+    Guardando os bytes de verdade uma vez, aqui, o produto nunca mais depende da
+    Campineira liberar a imagem de novo pra continuar aparecendo. Download em
+    paralelo (poucos workers) pra não esticar demais o checkpoint, e best-effort:
+    se a imagem falhar, guarda NULL e o MERGE abaixo preserva um valor já
+    existente (não apaga uma foto boa por causa de uma falha passageira).
 
     Usa uma tabela de staging (sobrescrita a cada chamada, WRITE_TRUNCATE) + um
     único MERGE pra cuidar de tudo de uma vez, em vez de 1 query por produto —
@@ -299,6 +340,8 @@ def atualizar_historico_bq(client, produtos):
         return False, "client BigQuery não conectado ou lista vazia"
     try:
         import pandas as pd
+        from concurrent.futures import ThreadPoolExecutor
+
         linhas = []
         for p in produtos:
             preco_str = p.get("preco") or "R$ 0"
@@ -323,30 +366,56 @@ def atualizar_historico_bq(client, produtos):
         if not linhas:
             return False, "nenhum produto com id válido"
 
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            imagens_bytes = list(pool.map(
+                lambda l: baixar_imagem_bytes_bruto(l["imagem"])[0], linhas
+            ))
+        for linha, img_bytes in zip(linhas, imagens_bytes):
+            linha["imagem_bytes"] = img_bytes
+
         df_stage = pd.DataFrame(linhas)
-        job_config = bigquery.LoadJobConfig(write_disposition="WRITE_TRUNCATE")
+        job_config = bigquery.LoadJobConfig(
+            write_disposition="WRITE_TRUNCATE",
+            schema=[
+                bigquery.SchemaField("id_produto", "STRING"),
+                bigquery.SchemaField("categoria", "STRING"),
+                bigquery.SchemaField("nome", "STRING"),
+                bigquery.SchemaField("estoque", "INTEGER"),
+                bigquery.SchemaField("preco", "STRING"),
+                bigquery.SchemaField("preco_num", "FLOAT"),
+                bigquery.SchemaField("ean", "STRING"),
+                bigquery.SchemaField("fabricante", "STRING"),
+                bigquery.SchemaField("imagem", "STRING"),
+                bigquery.SchemaField("link", "STRING"),
+                bigquery.SchemaField("imagem_bytes", "BYTES"),
+            ],
+        )
         client.load_table_from_dataframe(df_stage, TABLE_HISTORICO_STAGE, job_config=job_config).result()
 
         merge_sql = f"""
             MERGE `{TABLE_HISTORICO}` T
             USING `{TABLE_HISTORICO_STAGE}` S
             ON T.id_produto = S.id_produto
-            WHEN MATCHED AND (T.estoque != S.estoque OR T.preco_num != S.preco_num) THEN
+            WHEN MATCHED AND (
+                T.estoque != S.estoque OR T.preco_num != S.preco_num
+                OR (S.imagem_bytes IS NOT NULL AND T.imagem_bytes IS NULL)
+            ) THEN
               UPDATE SET
                 estoque = S.estoque,
                 preco = S.preco,
                 preco_num = S.preco_num,
                 nome = S.nome,
                 imagem = S.imagem,
+                imagem_bytes = COALESCE(S.imagem_bytes, T.imagem_bytes),
                 data_ultima_leitura = CURRENT_TIMESTAMP(),
                 data_ultima_atualizacao = CURRENT_TIMESTAMP()
             WHEN MATCHED THEN
               UPDATE SET data_ultima_leitura = CURRENT_TIMESTAMP()
             WHEN NOT MATCHED THEN
-              INSERT (id_produto, categoria, nome, estoque, preco, preco_num, ean, fabricante, imagem, link,
+              INSERT (id_produto, categoria, nome, estoque, preco, preco_num, ean, fabricante, imagem, imagem_bytes, link,
                       sku_upseller, data_primeira_leitura, data_ultima_leitura, data_ultima_atualizacao)
               VALUES (S.id_produto, S.categoria, S.nome, S.estoque, S.preco, S.preco_num, S.ean, S.fabricante,
-                      S.imagem, S.link, NULL, CURRENT_TIMESTAMP(), CURRENT_TIMESTAMP(), CURRENT_TIMESTAMP())
+                      S.imagem, S.imagem_bytes, S.link, NULL, CURRENT_TIMESTAMP(), CURRENT_TIMESTAMP(), CURRENT_TIMESTAMP())
         """
         client.query(merge_sql).result()
         return True, None
@@ -613,6 +682,30 @@ def _ids_com_sku_no_historico(_client) -> set:
         return set(df["id_produto"].astype(str))
     except Exception:
         return set()
+
+def _buscar_imagens_bytes_historico(client, ids) -> dict:
+    """Busca no histórico os bytes de imagem já salvos (ver atualizar_historico_bq)
+    para uma lista de id_produto — usada na aba Publicar pra preferir a foto já
+    baixada num checkpoint de varredura anterior em vez de tentar buscar ao vivo
+    da Campineira de novo (sujeito a bloqueio de TLS/IP, e mais lento). Sem cache:
+    a lista de ids muda a cada rerun/filtro da tela, e a query em si (WHERE IN
+    com poucas centenas de ids) é rápida. Retorna dict id_produto (str) -> bytes,
+    só com quem tem imagem_bytes salvo."""
+    ids = [str(i) for i in ids if i]
+    if not client or not ids:
+        return {}
+    try:
+        job_config = bigquery.QueryJobConfig(query_parameters=[
+            bigquery.ArrayQueryParameter("ids", "STRING", ids)
+        ])
+        df = client.query(
+            f"SELECT id_produto, imagem_bytes FROM `{TABLE_HISTORICO}` "
+            f"WHERE id_produto IN UNNEST(@ids) AND imagem_bytes IS NOT NULL",
+            job_config=job_config,
+        ).to_dataframe()
+        return dict(zip(df["id_produto"].astype(str), df["imagem_bytes"]))
+    except Exception:
+        return {}
 
 def filtrar_resultados(dados, filtros_cat):
     resultado = []
@@ -1809,10 +1902,21 @@ def pagina_campineira(client_bq=None):
                     "Imagem": p.get('imagem'),
                 } for p in validados])
 
-                # Filtra imagens inválidas (caminhos locais)
-                df_show["Imagem"] = df_show["Imagem"].apply(
-                    lambda x: x if x and x.startswith("http") else None
-                )
+                # Mesmo problema do Histórico: o ImageColumn com URL crua deixa o
+                # NAVEGADOR buscar direto na Campineira, sem o Referer que ela exige
+                # (bloqueio de hotlink) — a foto aparece quebrada mesmo com a URL
+                # certa. Prefere o byte já salvo no histórico (checkpoint da
+                # varredura); só cai pra URL crua (que pode ou não funcionar,
+                # dependendo do navegador de quem está vendo) se ainda não tiver.
+                import base64 as _base64
+                _imagens_hist_res = _buscar_imagens_bytes_historico(client_bq_pipeline, df_show["ID"].tolist())
+                def _foto_datauri_ou_url(row):
+                    b = _imagens_hist_res.get(str(row["ID"]))
+                    if b:
+                        return f"data:image/jpeg;base64,{_base64.b64encode(b).decode()}"
+                    return row["Imagem"] if row["Imagem"] and str(row["Imagem"]).startswith("http") else None
+                df_show["Imagem"] = df_show.apply(_foto_datauri_ou_url, axis=1)
+                df_show = df_show.drop(columns=["ID"])
                 st.dataframe(df_show, use_container_width=True, hide_index=True,
                              column_config={
                                  "Link": st.column_config.LinkColumn("Link"),
@@ -1979,17 +2083,26 @@ def pagina_campineira(client_bq=None):
             # continuar ocupando espaço aqui). Quem falhou continua na lista.
             validados_com_imagem = [p for p in validados_com_imagem if not st.session_state.get(f"pub_{p.get('id')}")]
 
+            # Produto recém-varrido já pode ter a foto salva no histórico (o
+            # checkpoint da varredura, a cada 5 páginas, já baixa e guarda os
+            # bytes — ver atualizar_historico_bq). Busca essa foto salva
+            # PRIMEIRO, e só tenta baixar ao vivo da Campineira (carregar_imagem_bytes,
+            # sujeito a bloqueio de TLS/IP dependendo de onde o app está rodando)
+            # pra quem ainda não passou por um checkpoint.
+            _imagens_historico = _buscar_imagens_bytes_historico(
+                client_bq_pipeline, [p.get('id') for p in validados_com_imagem]
+            )
+
             def _renderizar_card_pendente(p, idx, permitir_publicar):
                 with st.container(border=True):
                     col_img, col_info, col_btn = st.columns([0.7, 4.3, 1.5])
 
                     with col_img:
-                        if p.get('imagem'):
+                        img_bytes = _imagens_historico.get(str(p.get('id')))
+                        if not img_bytes and p.get('imagem'):
                             img_bytes = carregar_imagem_bytes(p['imagem'])
-                            if img_bytes:
-                                st.image(img_bytes, use_container_width=True)
-                            else:
-                                st.markdown("🖼️")
+                        if img_bytes:
+                            st.image(img_bytes, use_container_width=True)
                         else:
                             st.markdown("🖼️")
 
@@ -2064,6 +2177,14 @@ def pagina_campineira(client_bq=None):
                         _renderizar_card_pendente(p, f"semimg_{idx}", permitir_publicar=False)
 
             st.info(f"**{len(validados_com_imagem)}** produtos prontos para publicar")
+
+            # Diagnóstico temporário: se alguma imagem falhou ao carregar nessa
+            # tela, mostra o motivo exato (em vez de só a miniatura quebrada
+            # muda) — ajuda a confirmar se ainda é bloqueio de TLS, se virou
+            # bloqueio por IP (datacenter da nuvem), timeout, etc.
+            _erro_img = st.session_state.get("_ultimo_erro_imagem")
+            if _erro_img:
+                st.caption(f"🩺 Diagnóstico da última falha ao carregar imagem: `{_erro_img}`")
 
             # Resultado da ÚLTIMA publicação em massa, de forma persistente — o
             # log ao vivo (linhas_log) some no rerun do final do laço, senão.
@@ -2149,6 +2270,23 @@ def pagina_campineira(client_bq=None):
             if df_hist.empty:
                 st.info("Histórico ainda vazio — rode uma varredura em ⚙️ Configurar e Rodar pra começar a popular.")
             else:
+                # Monta a foto a partir dos BYTES armazenados (data URI) — não da URL
+                # crua da Campineira. O st.column_config.ImageColumn, quando recebe uma
+                # URL, deixa o NAVEGADOR do usuário buscar a imagem direto no site da
+                # Campineira, sem o header Referer que ela exige (proteção contra
+                # hotlink); por isso as fotos apareciam quebradas aqui mesmo com a URL
+                # certa. Produto sem bytes ainda salvos (nunca varrido de novo desde
+                # que passamos a guardar isso, ou falhou o download) fica sem foto em
+                # vez de mostrar o ícone quebrado.
+                import base64 as _base64
+                if "imagem_bytes" in df_hist.columns:
+                    df_hist["Foto_datauri"] = df_hist["imagem_bytes"].apply(
+                        lambda b: f"data:image/jpeg;base64,{_base64.b64encode(b).decode()}"
+                        if isinstance(b, (bytes, bytearray)) and b else None
+                    )
+                else:
+                    df_hist["Foto_datauri"] = None
+
                 total = len(df_hist)
                 publicados = int(df_hist["sku_upseller"].notna().sum())
 
@@ -2196,7 +2334,7 @@ def pagina_campineira(client_bq=None):
                     "estoque": "Estoque",
                     "preco": "Custo",
                     "sku_upseller": "SKU",
-                    "imagem": "Foto",
+                    "Foto_datauri": "Foto",
                     "data_primeira_leitura": "1ª Leitura",
                     "data_ultima_leitura": "Última Leitura",
                     "data_ultima_atualizacao": "Última Atualização",
