@@ -127,7 +127,14 @@ def ler_resultados(client=None) -> list:
                         "id": _sem_nan(row.get("id_produto")),
                         "nome": _sem_nan(row.get("nome")),
                         "categoria": _sem_nan(row.get("categoria")),
-                        "estoque": row.get("estoque"),
+                        # Único campo numérico da lista — os outros são STRING (NaN
+                        # do pandas vira None certinho com != próprio). "estoque" é
+                        # INTEGER no BigQuery: uma linha com esse campo NULL vem como
+                        # pd.NA (não NaN float), e pd.NA não é comparável nem
+                        # convertível pra bool (TypeError em "p.get('estoque') or 0"
+                        # no filtrar_resultados) — precisa do pd.isna(), não do
+                        # "!= próprio" que _sem_nan() usa.
+                        "estoque": 0 if pd.isna(row.get("estoque")) else int(row.get("estoque")),
                         "preco": _sem_nan(row.get("custo_campineira")),
                         "ean": _sem_nan(row.get("ean")),
                         "fabricante": _sem_nan(row.get("fabricante")),
