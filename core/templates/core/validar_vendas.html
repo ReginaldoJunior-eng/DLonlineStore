@@ -1,0 +1,81 @@
+{% extends "core/base.html" %}
+{% load l10n %}
+{% block title %}Validação de Vendas{% endblock %}
+{% block content %}
+<h1>🔎 Validação de Vendas</h1>
+<p style="color:var(--text-dim);font-size:12.5px;">
+  Corrige os dois problemas que deixam o lucro do Dashboard Financeiro errado: SKU vendido sem cadastro
+  na base (custo vira R$0) e SKU cadastrado com custo divergente entre marketplaces.
+</p>
+
+{% if n_pendentes %}
+  <div class="card" style="background:var(--pending-bg);color:var(--pending);border:none;margin-bottom:14px;">
+    ⏸️ {{ n_pendentes }} venda(s) fora do Dashboard Financeiro por enquanto — SKU sem custo cadastrado.
+  </div>
+{% elif n_pendentes == 0 %}
+  <div class="card" style="background:var(--success-bg);color:var(--success);border:none;margin-bottom:14px;">
+    Nenhuma venda represada esperando cadastro.
+  </div>
+{% endif %}
+
+<form method="post" action="{% url 'core:validar_vendas_fallback' %}" style="margin-bottom:20px;">
+  {% csrf_token %}
+  <button class="btn btn-ghost" style="width:auto;padding:9px 16px;" type="submit">🔁 Aplicar custo do SKU principal nas vendas já importadas</button>
+</form>
+
+<h3>🚨 SKUs vendidos sem cadastro ({{ sem_cadastro|length }})</h3>
+{% if not sem_cadastro %}
+  <div class="card" style="color:var(--success);">Nenhum SKU pendente. 🎉</div>
+{% else %}
+  {% for row in sem_cadastro %}
+    <form method="post" action="{% url 'core:validar_vendas_sem_cadastro' %}" class="card" style="margin-bottom:10px;">
+      {% csrf_token %}
+      <input type="hidden" name="sku" value="{{ row.sku }}">
+      <div style="display:grid;grid-template-columns:1.4fr 2.6fr 1.3fr 1fr;gap:12px;align-items:end;">
+        <div><label style="display:block;font-size:11px;color:var(--text-dim);">SKU</label><code>{{ row.sku }}</code></div>
+        <div><label style="display:block;font-size:11px;color:var(--text-dim);">Produto</label>
+          <input type="text" name="nome" value="{{ row.produto|default:'' }}" style="width:100%;padding:7px 9px;border-radius:6px;border:1px solid var(--line);"></div>
+        <div><label style="display:block;font-size:11px;color:var(--text-dim);">Custo de aquisição (R$)</label>
+          <input type="number" name="custo" step="0.01" min="0" value="0" style="width:100%;padding:7px 9px;border-radius:6px;border:1px solid var(--line);"></div>
+        <div>
+          <div style="font-size:11px;color:var(--text-dim);">{{ row.vendas|floatformat:0 }} venda(s) — R$ {{ row.faturamento|floatformat:2 }}</div>
+          <button class="btn btn-primary" style="width:100%;padding:7px 0;margin-top:4px;" type="submit">💾 Salvar</button>
+        </div>
+      </div>
+    </form>
+  {% endfor %}
+{% endif %}
+
+<div class="divider" style="background:var(--line);margin:22px 0;"></div>
+
+<h3>⚠️ Produtos com custo divergente ({{ total_divergentes }}) — {{ n_divergentes_com_venda }} com venda registrada</h3>
+<p style="color:var(--text-dim);font-size:12.5px;">Variantes do mesmo produto são agrupadas — corrigir aplica o mesmo custo pra todas de uma vez.</p>
+
+<form method="get" style="margin-bottom:14px;">
+  <label style="font-size:12.5px;"><input type="checkbox" name="so_com_venda" value="1" {% if so_com_venda %}checked{% endif %} onchange="this.form.submit()"> Mostrar só os que têm venda registrada</label>
+</form>
+
+{% if not divergentes %}
+  <div class="card" style="color:var(--success);">Nenhuma divergência encontrada. 🎉</div>
+{% else %}
+  {% for row in divergentes %}
+    <form method="post" action="{% url 'core:validar_vendas_divergente' %}" class="card" style="margin-bottom:10px;">
+      {% csrf_token %}
+      <input type="hidden" name="skus" value="{{ row.skus|join:"," }}">
+      <div style="display:grid;grid-template-columns:1.4fr 2.6fr 1.8fr 1fr;gap:12px;align-items:end;">
+        <div><label style="display:block;font-size:11px;color:var(--text-dim);">SKU principal</label><code>{{ row.sku_base }}</code>
+          {% if row.skus|length > 1 %}<div style="font-size:11px;color:var(--text-dim);">Variantes: {{ row.skus|join:", " }}</div>{% endif %}
+        </div>
+        <div>
+          <div style="font-size:12.5px;">{{ row.produto|default:"" }}</div>
+          <div style="font-size:11px;color:var(--text-dim);">Cadastrado hoje: {% for v in row.valores %}R$ {{ v|floatformat:2 }}{% if not forloop.last %} / {% endif %}{% endfor %}</div>
+          {% if row.vendas > 0 %}<div style="font-size:11px;color:var(--text-dim);">🛒 {{ row.vendas }} venda(s) registrada(s)</div>{% else %}<div style="font-size:11px;color:var(--text-dim);">Sem venda registrada ainda</div>{% endif %}
+        </div>
+        <div><label style="display:block;font-size:11px;color:var(--text-dim);">Custo correto (R$)</label>
+          <input type="number" name="custo" step="0.01" min="0" value="{{ row.valores.0|default:0|unlocalize }}" style="width:100%;padding:7px 9px;border-radius:6px;border:1px solid var(--line);"></div>
+        <button class="btn btn-primary" style="width:auto;padding:8px 14px;" type="submit">🛠️ Corrigir</button>
+      </div>
+    </form>
+  {% endfor %}
+{% endif %}
+{% endblock %}

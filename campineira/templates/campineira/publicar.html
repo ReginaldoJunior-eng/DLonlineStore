@@ -1,0 +1,296 @@
+{% extends "campineira/_base.html" %}
+{% block title %}Publicar — Campineira{% endblock %}
+{% block campineira_content %}
+<h3>🚀 Publicar Produtos no Upseller</h3>
+
+{% if upseller_logado %}
+  <div class="card" style="background:var(--success-bg);color:var(--success);border:none;margin-bottom:16px;">
+    ✅ Upseller conectado — pode publicar direto pelos botões abaixo.
+  </div>
+{% else %}
+  <div class="card" style="margin-bottom:16px;">
+    🔒 Faça login no Upseller pra publicar de verdade.
+    <a class="btn btn-primary" style="width:auto;padding:8px 14px;margin-left:8px;" href="{% url 'upseller:status' %}">Ir pro login</a>
+  </div>
+{% endif %}
+
+<form method="post" action="{% url 'campineira:publicar_excluir_selecionados' %}">
+  {% csrf_token %}
+  <div class="card" style="background:var(--success-bg);color:var(--success);border:none;margin-bottom:14px;">
+    <b>{{ total_prontos }}</b> produtos prontos para publicar
+    {% if total_paginas > 1 %}
+      <span style="color:var(--text-dim);"> — mostrando {{ inicio_intervalo }}–{{ fim_intervalo }} (página {{ pagina_atual }} de {{ total_paginas }})</span>
+    {% endif %}
+  </div>
+
+  <button class="btn btn-ghost" type="submit" style="width:auto;padding:9px 16px;margin-bottom:14px;"
+          onclick="return document.querySelectorAll('input[name=selecionados]:checked').length > 0">
+    🗑️ Excluir selecionados
+  </button>
+  {% if upseller_logado %}
+    <button id="btn-publicar-lote" class="btn btn-primary" type="button" style="width:auto;padding:9px 16px;margin-bottom:14px;margin-left:8px;"
+            onclick="publicarSelecionados()">
+      🚀 Publicar selecionados
+    </button>
+  {% endif %}
+
+  <div class="table-wrap">
+    <table class="tbl">
+      <thead>
+        <tr><th></th><th>Foto</th><th>Nome</th><th>Categoria</th><th>Estoque</th><th>Custo</th>
+            <th>💛 Shein</th><th>🟠 Shopee</th><th>🟡 Temu</th><th>⚫ TikTok</th><th></th></tr>
+      </thead>
+      <tbody>
+        {% for p in com_imagem %}
+          <tr>
+            <td><input type="checkbox" name="selecionados" value="{{ p.id }}"></td>
+            <td>{% if p.imagem %}<img class="thumb" src="{{ p.imagem }}" alt="" style="cursor:zoom-in;" title="Clique para ampliar" onclick="ampliarFoto('{{ p.imagem|escapejs }}')"> {% endif %}</td>
+            <td style="max-width:240px;">{{ p.nome }}</td>
+            <td>{{ p.categoria }}</td>
+            <td class="num">{{ p.estoque }}</td>
+            <td class="num">{{ p.preco }}</td>
+            <td class="num">R$ {{ p.preco_shein|default:0|floatformat:2 }}</td>
+            <td class="num">R$ {{ p.preco_shopee|default:0|floatformat:2 }}</td>
+            <td class="num">R$ {{ p.preco_temu|default:0|floatformat:2 }}</td>
+            <td class="num">R$ {{ p.preco_tiktok|default:0|floatformat:2 }}</td>
+            <td style="white-space:nowrap;">
+              {% if upseller_logado %}
+                <button class="btn btn-primary" style="width:auto;padding:4px 10px;" type="button"
+                        onclick="publicarProduto(this, '{{ p.id }}')">🚀</button>
+              {% endif %}
+              <button class="btn btn-ghost" style="width:auto;padding:4px 10px;" type="submit"
+                      formaction="{% url 'campineira:publicar_excluir' p.id %}">🗑️</button>
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  {% if total_paginas > 1 %}
+    <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:14px;">
+      {% if pagina_atual > 1 %}
+        <a class="btn btn-ghost" style="width:auto;padding:7px 12px;" href="?pagina={{ pagina_atual|add:"-1" }}">‹ Anterior</a>
+      {% endif %}
+      {% for p in paginas_range %}
+        {% if p == pagina_atual %}
+          <span class="btn btn-primary" style="width:auto;padding:7px 12px;cursor:default;">{{ p }}</span>
+        {% else %}
+          <a class="btn btn-ghost" style="width:auto;padding:7px 12px;" href="?pagina={{ p }}">{{ p }}</a>
+        {% endif %}
+      {% endfor %}
+      {% if pagina_atual < total_paginas %}
+        <a class="btn btn-ghost" style="width:auto;padding:7px 12px;" href="?pagina={{ pagina_atual|add:"1" }}">Próxima ›</a>
+      {% endif %}
+    </div>
+  {% endif %}
+</form>
+
+{% if sem_imagem %}
+  <details style="margin-top:22px;">
+    <summary style="cursor:pointer;font-weight:700;color:var(--danger);">
+      ⚠️ Produtos Sem Imagem Válida — não publicáveis ({{ total_sem_imagem }})
+    </summary>
+    <p style="color:var(--text-dim);font-size:12.5px;margin:10px 0;">
+      Esses produtos capturaram algo errado no lugar da foto (ícone, selo ou logo do site) e ficam
+      bloqueados pra publicar até a imagem ser corrigida numa nova varredura dessa categoria.
+    </p>
+    <div class="table-wrap">
+      <table class="tbl">
+        <thead><tr><th>Nome</th><th>Categoria</th><th>Imagem capturada</th></tr></thead>
+        <tbody>
+        {% for p in sem_imagem %}
+          <tr><td>{{ p.nome }}</td><td>{{ p.categoria }}</td><td style="color:var(--text-dim);">{{ p.imagem|default:"(vazio)" }}</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </details>
+{% endif %}
+
+<script>
+// Publicação roda em background no servidor (ver upseller/views.py) —
+// sem isso, uma publicação mais lenta que 120s (timeout de conexão do
+// waitress) derrubava a conexão enquanto o produto ainda era criado de
+// verdade por trás, deixando o botão preso pra sempre sem nenhum aviso.
+function publicarProduto(btn, produtoId) {
+  btn.disabled = true;
+  btn.textContent = 'Publicando...';
+  var csrftoken = document.querySelector('[name=csrfmiddlewaretoken]').value;
+  fetch("/upseller/publicar/" + produtoId + "/", {
+    method: 'POST',
+    headers: {'X-CSRFToken': csrftoken},
+  }).then(function(r) { return r.json(); }).then(function(data) {
+    if (!data.ok) {
+      alert(data.msg || 'Não foi possível iniciar a publicação.');
+      btn.disabled = false;
+      btn.textContent = '🚀';
+      return;
+    }
+    pollPublicacao(btn);
+  }).catch(function() {
+    alert('Erro de conexão ao tentar publicar.');
+    btn.disabled = false;
+    btn.textContent = '🚀';
+  });
+}
+
+function pollPublicacao(btn, falhasSeguidas) {
+  falhasSeguidas = falhasSeguidas || 0;
+  fetch("{% url 'upseller:publicar_produto_status' %}").then(function(r) {
+    if (!r.ok) { throw new Error('status ' + r.status); }
+    return r.json();
+  }).then(function(data) {
+    if (data.rodando) {
+      setTimeout(function() { pollPublicacao(btn, 0); }, 2000);
+      return;
+    }
+    var res = data.resultado;
+    if (res && res.ok) {
+      btn.textContent = '✅';
+      window.location.reload();
+    } else {
+      alert(res ? res.msg : 'Erro desconhecido ao publicar.');
+      btn.disabled = false;
+      btn.textContent = '🚀';
+    }
+  }).catch(function() {
+    // Mesmo motivo do pollExportacao (dashboard/financeiro.html): uma
+    // falha isolada de rede não pode travar o botão pra sempre.
+    if (falhasSeguidas >= 5) {
+      alert('Perdeu a conexão pra acompanhar o progresso — a publicação pode ter terminado nos bastidores mesmo assim. Recarregue a página pra conferir.');
+      btn.disabled = false;
+      btn.textContent = '🚀';
+      return;
+    }
+    setTimeout(function() { pollPublicacao(btn, falhasSeguidas + 1); }, 3000);
+  });
+}
+
+// Amplia a foto do produto num overlay — clique de novo (ou fora da imagem)
+// pra fechar. Sem lib nenhuma, só um <div> criado na hora.
+function ampliarFoto(url) {
+  var overlay = document.getElementById('overlay-zoom');
+  if (!overlay) {
+    overlay = document.createElement('div');
+    overlay.id = 'overlay-zoom';
+    overlay.style.cssText = 'display:none;position:fixed;inset:0;background:rgba(0,0,0,.75);' +
+      'z-index:1000;align-items:center;justify-content:center;cursor:zoom-out;';
+    overlay.innerHTML = '<img id="overlay-zoom-img" style="max-width:90vw;max-height:90vh;border-radius:10px;box-shadow:0 10px 40px rgba(0,0,0,.5);">';
+    overlay.addEventListener('click', function() { overlay.style.display = 'none'; });
+    document.body.appendChild(overlay);
+  }
+  document.getElementById('overlay-zoom-img').src = url;
+  overlay.style.display = 'flex';
+}
+
+// Publicação em massa: pega os produtos marcados e manda pra fila no
+// servidor (upseller/views.py::publicar_lote_iniciar) — roda um por vez,
+// em background, sobrevive trocar de página (barra flutuante em
+// base.html). Aqui, se a pessoa ficar nessa mesma tela, recarrega sozinho
+// quando a fila terminar, pra atualizar a lista.
+function publicarSelecionados() {
+  var ids = Array.prototype.map.call(
+    document.querySelectorAll('input[name=selecionados]:checked'), function(el) { return el.value; }
+  );
+  if (!ids.length) {
+    alert('Marque ao menos um produto pra publicar.');
+    return;
+  }
+  var btn = document.getElementById('btn-publicar-lote');
+  var csrftoken = document.querySelector('[name=csrfmiddlewaretoken]').value;
+  var form = new FormData();
+  ids.forEach(function(id) { form.append('selecionados', id); });
+  btn.disabled = true;
+  btn.textContent = 'Iniciando fila...';
+  fetch("{% url 'upseller:publicar_lote_iniciar' %}", {
+    method: 'POST', headers: {'X-CSRFToken': csrftoken}, body: form,
+  }).then(function(r) { return r.json(); }).then(function(data) {
+    if (!data.ok) {
+      alert(data.msg || 'Não foi possível iniciar a publicação em massa.');
+      btn.disabled = false;
+      btn.textContent = '🚀 Publicar selecionados';
+      return;
+    }
+    btn.textContent = '⏳ Publicando 0/' + data.total + '...';
+    pollLotePublicacao(btn);
+  }).catch(function() {
+    alert('Erro de conexão ao tentar iniciar a publicação em massa.');
+    btn.disabled = false;
+    btn.textContent = '🚀 Publicar selecionados';
+  });
+}
+
+function pollLotePublicacao(btn, falhasSeguidas) {
+  falhasSeguidas = falhasSeguidas || 0;
+  fetch("{% url 'upseller:publicar_lote_status' %}").then(function(r) {
+    if (!r.ok) { throw new Error('status ' + r.status); }
+    return r.json();
+  }).then(function(s) {
+    if (s.rodando) {
+      btn.textContent = '⏳ Publicando ' + s.concluidos + '/' + s.total + '...';
+      setTimeout(function() { pollLotePublicacao(btn, 0); }, 2000);
+      return;
+    }
+    // Terminou: recarrega a tela pra tirar da lista quem já foi publicado
+    // com sucesso e refletir o resultado real.
+    window.location.reload();
+  }).catch(function() {
+    if (falhasSeguidas >= 5) {
+      alert('Perdeu a conexão pra acompanhar a fila — ela pode ter terminado nos bastidores mesmo assim. Recarregue a página pra conferir.');
+      btn.disabled = false;
+      btn.textContent = '🚀 Publicar selecionados';
+      return;
+    }
+    setTimeout(function() { pollLotePublicacao(btn, falhasSeguidas + 1); }, 3000);
+  });
+}
+
+// Enquanto a varredura da Campineira estiver rodando, a lista de produtos
+// prontos pra publicar vai crescendo no BigQuery em tempo real — recarrega a
+// página de tempos em tempos pra mostrar isso sem precisar apertar F5. Some
+// sozinho quando a varredura termina (não fica recarregando pra sempre).
+(function() {
+  var rodando = {{ varredura_rodando|yesno:"true,false" }};
+  if (!rodando) return;
+  function checar(falhasSeguidas) {
+    falhasSeguidas = falhasSeguidas || 0;
+    fetch("{% url 'campineira:varredura_status' %}").then(function(r) {
+      if (!r.ok) { throw new Error('status ' + r.status); }
+      return r.json();
+    }).then(function(s) {
+      // Não recarrega se tiver alguma publicação em andamento na tela
+      // agora mesmo — evita cortar o acompanhamento de um clique em 🚀.
+      var publicandoAgora = Array.prototype.some.call(
+        document.querySelectorAll('button'),
+        function(b) { return b.textContent.indexOf('Publicando') !== -1; }
+      );
+      if (publicandoAgora) {
+        setTimeout(function() { checar(0); }, 8000);
+        return;
+      }
+      window.location.reload();
+    }).catch(function() {
+      if (falhasSeguidas >= 5) return;  // desiste em silêncio — não é crítico, só o auto-refresh
+      setTimeout(function() { checar(falhasSeguidas + 1); }, 8000);
+    });
+  }
+  setTimeout(function() { checar(0); }, 12000);
+})();
+
+// Se a pessoa sair da tela e voltar enquanto a fila de publicação em massa
+// ainda estiver rodando (começada por ela mesma ou vista antes), o botão já
+// nasce no estado certo em vez de deixar clicar de novo por engano.
+(function() {
+  var btn = document.getElementById('btn-publicar-lote');
+  if (!btn) return;
+  fetch("{% url 'upseller:publicar_lote_status' %}").then(function(r) { return r.json(); }).then(function(s) {
+    if (s.rodando) {
+      btn.disabled = true;
+      btn.textContent = '⏳ Publicando ' + s.concluidos + '/' + s.total + '...';
+      pollLotePublicacao(btn);
+    }
+  }).catch(function() {});
+})();
+</script>
+{% endblock %}

@@ -1,0 +1,88 @@
+{% extends "core/base.html" %}
+{% block title %}Login Upseller — D.L Online Store{% endblock %}
+{% block content %}
+<h1>🔐 Login Upseller</h1>
+
+{% with etapa=estado.etapa %}
+  {% if etapa == 3 %}
+    <div class="card" style="background:var(--success-bg);color:var(--success);border:none;margin-bottom:14px;">
+      ✅ Upseller conectado! Chrome em background.
+    </div>
+    <p style="color:var(--text-dim);font-size:12.5px;">🍪 Sessão salva — sobrevive a reinício e volta automático no próximo acesso.</p>
+    <div style="display:flex;gap:10px;">
+      <form method="post" action="{% url 'upseller:desconectar' %}">{% csrf_token %}<button class="btn btn-ghost" style="width:auto;padding:9px 16px;" type="submit">🚪 Desconectar</button></form>
+      <form method="post" action="{% url 'upseller:limpar_sessao' %}">{% csrf_token %}<button class="btn btn-ghost" style="width:auto;padding:9px 16px;" type="submit">🗑️ Limpar sessão salva</button></form>
+    </div>
+
+  {% elif etapa == 2 %}
+    <div class="card" style="max-width:420px;">
+      {% if estado.code_enviado %}
+        <p>📧 Código enviado! Confira seu e-mail e insira abaixo.</p>
+      {% else %}
+        <p>⚠️ Não conseguimos confirmar o envio do código — clique em "Reenviar código" antes, ou tente digitar mesmo assim.</p>
+      {% endif %}
+      <p style="color:var(--text-dim);font-size:12.5px;">Email: <code>{{ estado.email|default:"vendas.dlonlinestore@gmail.com" }}</code></p>
+      <form method="post" action="{% url 'upseller:login_codigo' %}">
+        {% csrf_token %}
+        <input type="text" name="codigo" maxlength="10" placeholder="Código de verificação"
+               style="width:100%;padding:9px 10px;margin-bottom:12px;border-radius:7px;border:1px solid var(--line);">
+        <div style="display:flex;gap:10px;">
+          <button class="btn btn-primary" type="submit" style="width:auto;padding:9px 16px;">✅ Confirmar</button>
+        </div>
+      </form>
+      <div style="display:flex;gap:8px;margin-top:8px;">
+        <form method="post" action="{% url 'upseller:login_reenviar_codigo' %}">
+          {% csrf_token %}
+          <button class="btn btn-ghost" style="width:auto;padding:6px 12px;" type="submit">🔄 Reenviar código</button>
+        </form>
+        <form method="post" action="{% url 'upseller:desconectar' %}">
+          {% csrf_token %}
+          <button class="btn btn-ghost" style="width:auto;padding:6px 12px;color:var(--danger);" type="submit">✖ Cancelar / Recomeçar</button>
+        </form>
+      </div>
+    </div>
+
+  {% elif etapa == 1 %}
+    <div class="card" style="max-width:420px;">
+      <p>✅ Email e senha preenchidos. Digite o CAPTCHA:</p>
+      {% if estado.captcha_img_b64 %}
+        <img src="{{ estado.captcha_img_b64 }}" alt="captcha" style="max-width:150px;display:block;margin-bottom:12px;border-radius:6px;">
+      {% endif %}
+      <form method="post" action="{% url 'upseller:login_captcha' %}">
+        {% csrf_token %}
+        <input type="text" name="captcha" placeholder="Captcha"
+               style="width:100%;padding:9px 10px;margin-bottom:12px;border-radius:7px;border:1px solid var(--line);">
+        <div style="display:flex;gap:10px;">
+          <button class="btn btn-primary" type="submit" style="width:auto;padding:9px 16px;">🚀 Login</button>
+        </div>
+      </form>
+      <div style="display:flex;gap:8px;margin-top:8px;">
+        <form method="post" action="{% url 'upseller:login_recarregar_captcha' %}">
+          {% csrf_token %}
+          <button class="btn btn-ghost" style="width:auto;padding:6px 12px;" type="submit">🔄 Recarregar captcha</button>
+        </form>
+        <form method="post" action="{% url 'upseller:desconectar' %}">
+          {% csrf_token %}
+          <button class="btn btn-ghost" style="width:auto;padding:6px 12px;color:var(--danger);" type="submit">✖ Cancelar / Recomeçar</button>
+        </form>
+      </div>
+    </div>
+
+  {% else %}
+    {% if tem_cookies %}
+      <div class="card" style="max-width:420px;">
+        <p style="color:var(--text-dim);">🍪 Sessão anterior encontrada!</p>
+        <div style="display:flex;gap:10px;">
+          <form method="post" action="{% url 'upseller:login_automatico' %}">{% csrf_token %}<button class="btn btn-primary" style="width:auto;padding:9px 16px;" type="submit">⚡ Login Automático</button></form>
+          <form method="post" action="{% url 'upseller:login_manual_iniciar' %}">{% csrf_token %}<button class="btn btn-ghost" style="width:auto;padding:9px 16px;" type="submit">🌐 Login Manual</button></form>
+        </div>
+      </div>
+    {% else %}
+      <form method="post" action="{% url 'upseller:login_manual_iniciar' %}">
+        {% csrf_token %}
+        <button class="btn btn-primary" style="width:auto;padding:10px 18px;" type="submit">🌐 Abrir Upseller</button>
+      </form>
+    {% endif %}
+  {% endif %}
+{% endwith %}
+{% endblock %}

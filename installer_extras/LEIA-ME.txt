@@ -1,0 +1,36 @@
+D.L Online Store — Painel (versão local)
+==========================================
+
+COMO USAR:
+- Abra pelo atalho "D.L Online Store" (Área de Trabalho ou Menu Iniciar).
+- Uma janela preta (console) abre e fica ali rodando por trás — é o programa
+  em si. NÃO FECHE essa janela enquanto estiver usando o painel: fechá-la
+  desliga o programa.
+- O navegador abre sozinho em http://127.0.0.1:8000/.
+- Pra encerrar: feche a janela preta do console.
+
+LOGIN:
+- Usuário: leandro / Senha: 123 (libera o menu "Operações")
+- Senha do Financeiro: a mesma de sempre.
+
+IMPORTANTE — CREDENCIAL DO BANCO DE DADOS:
+Por segurança, esse instalador NÃO inclui a credencial do BigQuery. Sem ela
+o painel abre, mas nenhuma tela com dado (Dashboard, Campineira, etc.) vai
+funcionar. Pra ativar:
+1. Peça a quem te passou o instalador o arquivo de credencial (.json) —
+   deve chegar por um canal separado (WhatsApp, e-mail direto), nunca junto
+   com o instalador.
+2. Clique no atalho "Colar credencial aqui" (Área de Trabalho ou Menu
+   Iniciar > D.L Online Store) — ele já abre a pasta certa.
+3. Arraste o arquivo .json pra dentro dessa pasta.
+4. Abra o programa normalmente.
+
+REQUISITOS:
+- Windows 10/11 e internet (o painel conecta no BigQuery e no Upseller).
+- Não precisa instalar Python nem nada além disso — já vem tudo no instalador.
+
+SE ALGO NÃO ABRIR:
+- Confira se a pasta "secrets" (com o .json de credenciais) existe e está no
+  lugar certo (ver acima).
+- Se o navegador não abrir sozinho, acesse manualmente:
+  http://127.0.0.1:8000/

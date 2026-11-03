@@ -1,0 +1,257 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="icon" type="image/png" href="{% static 'core/logo.png' %}">
+<title>{% block title %}D.L Online Store{% endblock %}</title>
+<style>
+  :root {
+    --ink: #16231d; --paper: #f1f3ee; --paper-raised: #ffffff;
+    --azul-escuro: #0d3f8a; --sidebar-bg: #e7e8e3; --sidebar-border: #d7d9d2;
+    --azul: #0a66c2; --azul-profundo: #08306b;
+    --azul-suave: #dceaf9; --line: rgba(22,35,29,.12); --text: #16231d;
+    --text-dim: #5b6a61; --success: #2f7d5e; --success-bg: #e2efe8;
+    --pending: #7a6a2e; --pending-bg: #efe9d2; --danger: #b23b32; --danger-bg: #f6dfdc;
+    --shadow: 0 1px 2px rgba(22,35,29,.06), 0 8px 24px rgba(22,35,29,.05);
+  }
+  * { box-sizing: border-box; }
+  html { scrollbar-width: none; -ms-overflow-style: none; }
+  html::-webkit-scrollbar { display: none; }
+  body {
+    margin: 0; background: var(--paper); color: var(--text);
+    font-family: -apple-system, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .num { font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace; font-variant-numeric: tabular-nums; }
+  a { color: inherit; }
+
+  .shell { display: grid; grid-template-columns: 240px 1fr; min-height: 100vh; }
+  .sidebar {
+    background: var(--sidebar-bg); color: var(--text); padding: 22px 16px;
+    display: flex; flex-direction: column; gap: 22px;
+    border-right: 1px solid var(--sidebar-border);
+  }
+  .brand { padding: 0 6px; text-align: center; }
+  .brand img { width: 100%; max-width: 188px; height: auto; }
+  .divider { height: 1px; background: var(--sidebar-border); margin: 4px 0; }
+
+  nav { display: flex; flex-direction: column; gap: 2px; }
+  .nav-label { font-size: 10.5px; text-transform: uppercase; letter-spacing: .09em; color: var(--text-dim); opacity: .85; padding: 12px 10px 6px; }
+  .nav-item { display: flex; align-items: center; gap: 9px; padding: 9px 10px; border-radius: 8px; font-size: 13.5px; color: var(--text); text-decoration: none; border: 1px solid transparent; }
+  .nav-item:hover { background: rgba(22,35,29,.05); }
+  .nav-item.active { background: rgba(10,102,194,.14); color: var(--azul-profundo); border-color: rgba(10,102,194,.3); font-weight: 600; }
+  .ic { width: 16px; text-align: center; font-size: 13px; }
+  .status-dot { width: 8px; height: 8px; border-radius: 50%; margin-left: auto; flex-shrink: 0; }
+  .status-dot-on { background: var(--success); box-shadow: 0 0 0 2px var(--success-bg); }
+  .status-dot-off { background: var(--danger); box-shadow: 0 0 0 2px var(--danger-bg); }
+
+  .welcome { color: var(--azul-profundo); font-size: 13.5px; font-weight: 700; padding: 0 6px 4px; }
+
+  .btn { border: none; border-radius: 8px; padding: 9px 15px; font-size: 13px; font-weight: 700; cursor: pointer; font-family: inherit; }
+  .btn-primary { background: var(--azul); color: #f0f6ff; width: 100%; }
+  .btn-primary:hover { filter: brightness(1.06); }
+  .btn:focus-visible { outline: 2px solid var(--azul-escuro); outline-offset: 2px; }
+  .btn-logout { background: transparent; color: var(--danger); border: 1px solid rgba(178,59,50,.3); width: 100%; }
+  .btn-ghost { background: var(--paper-raised); color: var(--azul-profundo); border: 1px solid var(--line); }
+  .btn-ghost:hover { background: rgba(10,102,194,.08); border-color: rgba(10,102,194,.3); }
+
+  .sidebar-foot { margin-top: auto; text-align: center; font-size: 10.5px; color: var(--text-dim); }
+
+  /* padding-top maior que o normal (26px) — reserva espaço pra barrinha de
+     minimizar/fechar não brigar com o conteúdo da própria página, que
+     agora começa bem no topo da janela (sem barra do Windows empurrando
+     pra baixo); achado com print real de um botão da página colidindo com
+     os botões da janela. */
+  main { padding: 48px 34px 60px; min-width: 0; }
+  .msg { padding: 10px 14px; border-radius: 8px; font-size: 13px; margin-bottom: 16px; }
+  .msg-error { background: var(--danger-bg); color: var(--danger); }
+
+  .card { background: var(--paper-raised); border: 1px solid var(--line); border-radius: 12px; box-shadow: var(--shadow); padding: 18px 20px; }
+
+  /* Tabelas/metricas/chips reaproveitados em várias telas (Campineira, Estoque, Validar Vendas...) */
+  .table-wrap { overflow-x: auto; }
+  table.tbl { width: 100%; border-collapse: collapse; font-size: 12.5px; min-width: 620px; }
+  table.tbl th { text-align: left; font-size: 10.5px; text-transform: uppercase; letter-spacing: .05em;
+                 color: var(--text-dim); font-weight: 600; padding: 8px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  table.tbl td { padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+  table.tbl tr:last-child td { border-bottom: none; }
+  table.tbl img.thumb { width: 40px; height: 40px; object-fit: cover; border-radius: 6px; }
+
+  .chip { display: inline-flex; align-items: center; gap: 5px; padding: 3px 9px; border-radius: 99px; font-size: 11px; font-weight: 700; }
+  .chip-ok { background: var(--success-bg); color: var(--success); }
+  .chip-wait { background: var(--pending-bg); color: var(--pending); }
+  .chip::before { content: ""; width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
+
+  .filtros-row { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 16px; }
+  .filtros-row input, .filtros-row select {
+    padding: 8px 10px; border-radius: 7px; border: 1px solid var(--line); font-family: inherit; font-size: 13px;
+  }
+  .metric-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 14px; margin-bottom: 18px; }
+  .metric-row .card { text-align: center; }
+  .metric-row .lbl { font-size: 11px; color: var(--text-dim); margin-bottom: 4px; }
+  .metric-row .val { font-size: 22px; font-weight: 800; }
+
+  @media (max-width: 860px) {
+    .shell { grid-template-columns: 1fr; }
+    .sidebar { display: none; }
+    main { padding: 18px; }
+  }
+
+  /* Minimizar/fechar — só existem porque a janela é sem moldura (sem
+     barra de título do Windows); fica escondido até confirmar que tá
+     rodando dentro do app embutido (evento pywebviewready) — numa aba de
+     navegador normal (teste local, fallback sem WebView2) o navegador já
+     tem seus próprios botões, não precisa duplicar. */
+  #janela-controles {
+    position: fixed; top: 6px; right: 6px; z-index: 9999; display: none;
+    gap: 2px; background: var(--sidebar-bg); border: 1px solid var(--sidebar-border);
+    border-radius: 7px; padding: 2px;
+  }
+  #janela-controles button {
+    width: 24px; height: 20px; border: none; border-radius: 5px; background: transparent;
+    color: var(--text-dim); font-size: 11px; cursor: pointer; font-family: inherit;
+    display: flex; align-items: center; justify-content: center;
+  }
+  #janela-controles button:hover { background: rgba(10,102,194,.12); color: var(--azul); }
+  #janela-controles button.btn-fechar-janela:hover { background: var(--danger-bg); color: var(--danger); }
+</style>
+{% block extra_head %}{% endblock %}
+</head>
+<body>
+<div id="janela-controles">
+  <button type="button" onclick="window.pywebview.api.minimizar()" title="Minimizar">─</button>
+  <button type="button" class="btn-fechar-janela" onclick="window.pywebview.api.fechar()" title="Fechar">✕</button>
+</div>
+<script>
+  window.addEventListener('pywebviewready', function() {
+    document.getElementById('janela-controles').style.display = 'flex';
+  });
+</script>
+<div class="shell">
+  <aside class="sidebar">
+    <div class="brand">
+      <img src="{% static 'core/logo.png' %}" alt="D.L Online Store">
+    </div>
+    <div class="divider"></div>
+
+    <div class="welcome">👋 Bem-vindo, Leandro</div>
+    <div>
+      <div class="nav-label">Operações</div>
+      <nav>
+        <a class="nav-item {% if 'upseller' in request.path %}active{% endif %}" href="{% url 'upseller:status' %}">
+          <span class="ic">🔗</span> Login Upseller
+          <span class="status-dot {% if upseller_conectado %}status-dot-on{% else %}status-dot-off{% endif %}" title="{% if upseller_conectado %}Conectado{% else %}Desconectado{% endif %}"></span>
+        </a>
+        <a class="nav-item {% if request.resolver_match.url_name == 'calculadora' %}active{% endif %}" href="{% url 'core:calculadora' %}"><span class="ic">⇄</span> Comparativo de Preços</a>
+        <a class="nav-item {% if request.resolver_match.url_name == 'cadastro' %}active{% endif %}" href="{% url 'core:cadastro' %}"><span class="ic">＋</span> Novo Item na Base</a>
+        <a class="nav-item {% if request.resolver_match.url_name == 'alterar_preco' %}active{% endif %}" href="{% url 'core:alterar_preco' %}"><span class="ic">R$</span> Alterar Preços</a>
+        <a class="nav-item {% if request.resolver_match.url_name == 'estoque' %}active{% endif %}" href="{% url 'core:estoque' %}"><span class="ic">▤</span> Gestão de Estoque</a>
+        <a class="nav-item {% if 'campineira' in request.path %}active{% endif %}" href="{% url 'campineira:home' %}"><span class="ic">⌕</span> Campineira</a>
+        <a class="nav-item {% if 'dashboard' in request.path %}active{% endif %}" href="{% url 'dashboard:financeiro' %}"><span class="ic">📊</span> Dashboard Financeiro</a>
+        <a class="nav-item {% if request.resolver_match.url_name == 'validar_vendas' %}active{% endif %}" href="{% url 'core:validar_vendas' %}"><span class="ic">✓</span> Validar Vendas</a>
+      </nav>
+    </div>
+    <div class="divider"></div>
+    <form method="post" action="{% url 'core:sair' %}">
+      {% csrf_token %}
+      <button class="btn btn-logout" type="submit">🚪 Sair</button>
+    </form>
+
+    <div class="sidebar-foot">Desenvolvido por DataStream BI</div>
+  </aside>
+
+  <main>
+    {% if messages %}
+      {% for message in messages %}
+        <div class="msg msg-error">{{ message }}</div>
+      {% endfor %}
+    {% endif %}
+    {% block content %}{% endblock %}
+  </main>
+</div>
+
+{% if request.session.logado %}
+<div id="lote-progresso" class="card" style="display:none;position:fixed;bottom:18px;right:18px;max-width:300px;z-index:999;">
+  <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;">
+    <b id="lote-progresso-titulo" style="font-size:13px;">🚀 Publicando em massa...</b>
+    <button id="lote-progresso-fechar" type="button" title="Fechar" aria-label="Fechar"
+            style="display:none;border:none;background:transparent;cursor:pointer;font-size:14px;color:var(--text-dim);padding:0;">✕</button>
+  </div>
+  <div id="lote-progresso-nome" style="font-size:11.5px;color:var(--text-dim);margin:4px 0 8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;"></div>
+  <div id="lote-progresso-erros" style="font-size:11px;color:var(--danger);margin:4px 0 8px;max-height:120px;overflow-y:auto;display:none;"></div>
+  <div style="background:var(--line);border-radius:99px;height:8px;overflow:hidden;">
+    <div id="lote-progresso-barra" style="background:var(--azul);height:100%;width:0%;transition:width .3s;"></div>
+  </div>
+  <div id="lote-progresso-contagem" class="num" style="font-size:11.5px;margin-top:6px;color:var(--text-dim);"></div>
+</div>
+<script>
+// Barra flutuante da fila de publicação em massa (Campineira > Publicar) —
+// aparece em QUALQUER página, porque a fila roda solta no servidor
+// independente de pra onde a pessoa navegou (pedido explícito: "deixa
+// livre pra navegar em outras coisas e deixa a publicação fluindo").
+(function() {
+  var caixa = document.getElementById('lote-progresso');
+  var titulo = document.getElementById('lote-progresso-titulo');
+  var nomeEl = document.getElementById('lote-progresso-nome');
+  var barra = document.getElementById('lote-progresso-barra');
+  var contagem = document.getElementById('lote-progresso-contagem');
+  var errosEl = document.getElementById('lote-progresso-erros');
+  var fechar = document.getElementById('lote-progresso-fechar');
+
+  fechar.addEventListener('click', function() {
+    sessionStorage.setItem('lote_publicar_dismissed', '1');
+    caixa.style.display = 'none';
+  });
+
+  function checar() {
+    fetch("{% url 'upseller:publicar_lote_status' %}").then(function(r) { return r.json(); }).then(function(s) {
+      if (!s.total) { setTimeout(checar, 6000); return; }  // nunca teve fila nessa sessão do app
+      if (s.rodando) {
+        sessionStorage.removeItem('lote_publicar_dismissed');
+        caixa.style.display = 'block';
+        fechar.style.display = 'none';
+        titulo.textContent = '🚀 Publicando em massa...';
+        nomeEl.textContent = s.atual_nome || '';
+        errosEl.style.display = 'none';
+        var pct = Math.round((s.concluidos / s.total) * 100);
+        barra.style.width = pct + '%';
+        contagem.textContent = s.concluidos + '/' + s.total;
+        setTimeout(checar, 2500);
+        return;
+      }
+      if (sessionStorage.getItem('lote_publicar_dismissed') === '1') {
+        setTimeout(checar, 8000);
+        return;
+      }
+      var falhas = s.resultados.filter(function(r) { return !r.ok; });
+      var ok = s.total - falhas.length;
+      caixa.style.display = 'block';
+      fechar.style.display = 'inline-block';
+      titulo.textContent = '✅ Publicação em massa concluída';
+      nomeEl.textContent = '';
+      barra.style.width = '100%';
+      contagem.textContent = ok + ' publicado(s)' + (falhas.length > 0 ? ', ' + falhas.length + ' com erro' : '');
+      if (falhas.length > 0) {
+        // Antes o aviso só dizia "X com erro" sem falar QUAL era o
+        // problema — a pessoa não tinha como saber o motivo sem ir atrás
+        // manualmente. Agora lista nome + mensagem de cada falha.
+        errosEl.innerHTML = falhas.map(function(f) {
+          var nome = (f.nome || f.produto_id || 'Produto').toString();
+          var msg = (f.msg || 'erro desconhecido').toString();
+          return '<div style="margin-bottom:3px;"><b>' + nome.replace(/</g, '&lt;') + ':</b> ' + msg.replace(/</g, '&lt;') + '</div>';
+        }).join('');
+        errosEl.style.display = 'block';
+      } else {
+        errosEl.style.display = 'none';
+      }
+      setTimeout(checar, 8000);
+    }).catch(function() { setTimeout(checar, 8000); });
+  }
+  checar();
+})();
+</script>
+{% endif %}
+</body>
+</html>

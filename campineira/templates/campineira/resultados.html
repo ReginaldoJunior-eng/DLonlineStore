@@ -1,0 +1,51 @@
+{% extends "campineira/_base.html" %}
+{% block title %}Resultados — Campineira{% endblock %}
+{% block campineira_content %}
+<h3>Produtos Validados</h3>
+
+{% if not total_brutos %}
+  <div class="card" style="color:var(--text-dim);">Nenhuma varredura realizada ainda. Vá para a aba ⚙️ e inicie uma varredura.</div>
+{% else %}
+  <form method="get" class="filtros-row">
+    <select name="categoria" onchange="this.form.submit()">
+      {% for c in cats_disp %}<option value="{{ c }}" {% if c == cat_sel %}selected{% endif %}>{{ c }}</option>{% endfor %}
+    </select>
+    <input type="text" name="busca" placeholder="Buscar produto" value="{{ busca }}">
+    <select name="ordem" onchange="this.form.submit()">
+      {% for o in ordens %}<option value="{{ o }}" {% if o == ordem %}selected{% endif %}>{{ o }}</option>{% endfor %}
+    </select>
+    <button class="btn btn-ghost" type="submit" style="width:auto;padding:8px 14px;">Filtrar</button>
+    <a class="btn btn-primary" style="width:auto;padding:8px 14px;" href="{% url 'campineira:resultados_excel' %}?categoria={{ cat_sel }}&busca={{ busca }}&ordem={{ ordem }}">📥 Baixar Excel</a>
+  </form>
+
+  <div class="card" style="background:var(--success-bg);color:var(--success);border:none;margin-bottom:14px;">
+    ✅ <b>{{ total_validados }}</b> produtos validados de <b>{{ total_brutos }}</b> coletados
+    {% if truncado %}<span style="color:var(--text-dim);"> — mostrando os 150 primeiros</span>{% endif %}
+  </div>
+
+  <div class="table-wrap">
+    <table class="tbl">
+      <thead>
+        <tr><th>Foto</th><th>Nome</th><th>Categoria</th><th>Estoque</th><th>Custo</th><th>💰 Lucro</th>
+            <th>💛 Shein</th><th>🟠 Shopee</th><th>🟡 Temu</th><th>⚫ TikTok</th></tr>
+      </thead>
+      <tbody>
+        {% for p in validados %}
+          <tr>
+            <td>{% if p.imagem %}<img class="thumb" src="{{ p.imagem }}" alt="">{% endif %}</td>
+            <td style="max-width:260px;">{{ p.nome }}</td>
+            <td>{{ p.categoria }}</td>
+            <td class="num">{{ p.estoque }}</td>
+            <td class="num">{{ p.preco }}</td>
+            <td class="num">R$ {{ p.lucro_max|default:0|floatformat:2 }}</td>
+            <td class="num">R$ {{ p.preco_shein|default:0|floatformat:2 }}</td>
+            <td class="num">R$ {{ p.preco_shopee|default:0|floatformat:2 }}</td>
+            <td class="num">R$ {{ p.preco_temu|default:0|floatformat:2 }}</td>
+            <td class="num">R$ {{ p.preco_tiktok|default:0|floatformat:2 }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+{% endif %}
+{% endblock %}

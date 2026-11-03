@@ -1,0 +1,54 @@
+{% extends "core/base.html" %}
+{% load l10n %}
+{% block title %}Alterar Preços{% endblock %}
+{% block content %}
+<h1>💰 Atualização de Preços em Lote</h1>
+
+<div class="card" style="max-width:640px;margin-bottom:16px;">
+  <b>➕ Adicionar Item para Alteração</b>
+  <form method="get" style="margin-top:10px;">
+    <input type="text" name="item" list="alterar-preco-opcoes" value="{{ request.GET.item }}"
+           placeholder="Digite para buscar..." autocomplete="off" onchange="this.form.submit()"
+           style="width:100%;padding:9px 10px;margin-bottom:12px;border-radius:7px;border:1px solid var(--line);">
+    <datalist id="alterar-preco-opcoes">
+      {% for o in opcoes %}<option value="{{ o }}">{% endfor %}
+    </datalist>
+  </form>
+
+  {% if selecionado %}
+    <form method="post" action="{% url 'core:alterar_preco_adicionar' %}">
+      {% csrf_token %}
+      <input type="hidden" name="sku" value="{{ selecionado.sku }}">
+      <input type="hidden" name="produto" value="{{ selecionado.produto }}">
+      <div style="display:flex;gap:14px;align-items:flex-end;">
+        <div><div class="lbl" style="font-size:11px;color:var(--text-dim);">Custo Atual</div><div class="val num" style="font-size:18px;font-weight:700;">R$ {{ selecionado.custo_atual|floatformat:2 }}</div></div>
+        <div>
+          <label style="display:block;font-size:11px;color:var(--text-dim);">Novo Valor (R$)</label>
+          <input type="number" name="novo_valor" step="0.01" value="{{ selecionado.custo_atual|unlocalize }}" style="padding:8px 10px;border-radius:7px;border:1px solid var(--line);width:140px;">
+        </div>
+        <button class="btn btn-ghost" type="submit" style="width:auto;padding:9px 16px;">Adicionar à Fila</button>
+      </div>
+    </form>
+  {% else %}
+    <p style="color:var(--text-dim);">Pesquise um produto acima para ajustar o valor.</p>
+  {% endif %}
+</div>
+
+{% if fila %}
+  <h3>📋 Itens na Fila de Processamento</h3>
+  {% for item in fila %}
+    <div class="card" style="border-left:4px solid var(--azul);display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+      <div>
+        <b>{{ item.produto }}</b><br>
+        <code>{{ item.sku }}</code> → <b>R$ {{ item.novo_valor|floatformat:2 }}</b>
+      </div>
+      <form method="post" action="{% url 'core:alterar_preco_remover' forloop.counter0 %}">{% csrf_token %}<button class="btn btn-ghost" style="width:auto;padding:6px 12px;" type="submit">🗑️</button></form>
+    </div>
+  {% endfor %}
+
+  <div style="display:flex;gap:10px;margin-top:14px;">
+    <form method="post" action="{% url 'core:alterar_preco_enviar' %}">{% csrf_token %}<button class="btn btn-primary" style="width:auto;padding:10px 18px;" type="submit">🚀 Enviar Pacote ao BigQuery</button></form>
+    <form method="post" action="{% url 'core:alterar_preco_limpar' %}">{% csrf_token %}<button class="btn btn-ghost" style="width:auto;padding:10px 18px;" type="submit">❌ Limpar Fila</button></form>
+  </div>
+{% endif %}
+{% endblock %}

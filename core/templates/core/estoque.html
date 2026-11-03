@@ -1,0 +1,104 @@
+{% extends "core/base.html" %}
+{% load l10n %}
+{% block title %}Gestão de Estoque{% endblock %}
+{% block content %}
+<h1>📦 Gestão de Estoque</h1>
+
+<div class="card" style="max-width:640px;margin-bottom:20px;">
+  <b>🔎 Localizar Produto</b>
+  <form method="get" style="display:flex;gap:10px;margin:10px 0;min-width:0;">
+    <input type="text" name="produto_busca" list="produtos-datalist" value="{{ produto_busca }}" placeholder="Buscar por nome do produto..."
+           style="flex:1;min-width:0;padding:9px 10px;border-radius:7px;border:1px solid var(--line);">
+    <datalist id="produtos-datalist">
+      {% for p in produtos %}<option value="{{ p }}">{% endfor %}
+    </datalist>
+    <input type="text" name="sku_busca" list="skus-datalist" value="{{ sku_busca }}" placeholder="Buscar por SKU..."
+           style="flex:1;min-width:0;padding:9px 10px;border-radius:7px;border:1px solid var(--line);">
+    <datalist id="skus-datalist">
+      {% for s in skus %}<option value="{{ s }}">{% endfor %}
+    </datalist>
+    <button class="btn btn-ghost" type="submit" style="width:auto;padding:9px 14px;flex-shrink:0;">Buscar</button>
+  </form>
+  {% if sku_nao_encontrado %}
+    <p style="color:var(--danger);font-size:12.5px;margin:0 0 4px;">Nenhum SKU encontrado parecido com "{{ sku_nao_encontrado }}".</p>
+  {% elif produto_nao_encontrado %}
+    <p style="color:var(--danger);font-size:12.5px;margin:0 0 4px;">Nenhum produto encontrado parecido com "{{ produto_nao_encontrado }}".</p>
+  {% endif %}
+
+  {% if item_selecionado %}
+    <div class="card" style="background:var(--success-bg);border:none;margin-bottom:14px;">
+      📍 {{ item_selecionado.produto }} <code>{{ item_selecionado.sku }}</code>
+      — <span class="num">{{ item_selecionado.quantidade_atual }}</span> un. em estoque agora
+    </div>
+    <div style="display:flex;gap:16px;flex-wrap:wrap;">
+      <form method="post" action="{% url 'core:estoque_entrada' %}">
+        {% csrf_token %}
+        <input type="hidden" name="produto" value="{{ item_selecionado.produto }}">
+        <input type="hidden" name="sku" value="{{ item_selecionado.sku }}">
+        <div style="font-size:11px;color:var(--text-dim);font-weight:700;margin-bottom:6px;">📥 Entrada de Mercadoria</div>
+        <div style="display:flex;gap:14px;align-items:flex-end;flex-wrap:wrap;">
+          <div><label style="display:block;font-size:11px;color:var(--text-dim);">Quantidade Comprada</label>
+            <input type="number" name="quantidade" min="1" value="1" style="padding:8px 10px;border-radius:7px;border:1px solid var(--line);width:120px;"></div>
+          <div><label style="display:block;font-size:11px;color:var(--text-dim);">Valor Pago Unitário (R$)</label>
+            <input type="number" name="valor_pago" step="0.01" value="{{ item_selecionado.custo_num|unlocalize }}" style="padding:8px 10px;border-radius:7px;border:1px solid var(--line);width:140px;"></div>
+          <button class="btn btn-primary" type="submit" style="width:auto;padding:9px 16px;">📥 Salvar Entrada</button>
+        </div>
+      </form>
+
+      <form method="post" action="{% url 'core:estoque_saida' %}">
+        {% csrf_token %}
+        <input type="hidden" name="produto" value="{{ item_selecionado.produto }}">
+        <input type="hidden" name="sku" value="{{ item_selecionado.sku }}">
+        <input type="hidden" name="valor_pago" value="{{ item_selecionado.custo_num|unlocalize }}">
+        <input type="hidden" name="quantidade_atual" value="{{ item_selecionado.quantidade_atual|unlocalize }}">
+        <div style="font-size:11px;color:var(--text-dim);font-weight:700;margin-bottom:6px;">📤 Saída de Mercadoria</div>
+        <div style="display:flex;gap:14px;align-items:flex-end;flex-wrap:wrap;">
+          <div><label style="display:block;font-size:11px;color:var(--text-dim);">Quantidade que Saiu</label>
+            <input type="number" name="quantidade_saida" min="1" value="1" style="padding:8px 10px;border-radius:7px;border:1px solid var(--line);width:120px;"></div>
+          <button class="btn btn-ghost" type="submit" style="width:auto;padding:9px 16px;">📤 Registrar Saída</button>
+        </div>
+      </form>
+    </div>
+  {% endif %}
+</div>
+
+{% if erro %}
+  <div class="msg msg-error">Erro ao carregar dados do estoque: {{ erro }}</div>
+{% elif vazio %}
+  <div class="card" style="color:var(--text-dim);">Estoque vazio no momento.</div>
+{% else %}
+  <div class="metric-row">
+    <div class="card"><div class="lbl">💰 Valor em Estoque</div><div class="val num">R$ {{ total_investido|floatformat:2 }}</div></div>
+    <div class="card"><div class="lbl">🚀 Lucro Potencial</div><div class="val num">R$ {{ lucro_potencial|floatformat:2 }}</div></div>
+    <div class="card"><div class="lbl">📦 Total de Itens</div><div class="val num">{{ qtd_total }} un</div></div>
+  </div>
+
+  <h3>📋 Gestão de Inventário por SKU</h3>
+  <div class="table-wrap">
+    <table class="tbl">
+      <thead><tr><th>Produto</th><th>Melhor Canal</th><th>Lucro Total</th><th>Qtd</th><th>Ajustar (+/-)</th><th></th></tr></thead>
+      <tbody>
+      {% for l in linhas %}
+        <tr>
+          <td><b>{{ l.produto }}</b><br><small><code>{{ l.sku }}</code></small></td>
+          <td><b>{{ l.canal }}</b></td>
+          <td class="num">R$ {{ l.lucro_total|floatformat:2 }}</td>
+          <td class="num">{{ l.quantidade }}</td>
+          <td colspan="2">
+            <form method="post" action="{% url 'core:estoque_ajustar' %}" style="display:flex;gap:6px;">
+              {% csrf_token %}
+              <input type="hidden" name="sku" value="{{ l.sku }}">
+              <input type="hidden" name="produto" value="{{ l.produto }}">
+              <input type="hidden" name="valor_pago" value="{{ l.valor_pago|unlocalize }}">
+              <input type="hidden" name="quantidade_atual" value="{{ l.quantidade|unlocalize }}">
+              <input type="number" name="ajuste" value="0" step="1" style="width:80px;padding:6px 8px;border-radius:6px;border:1px solid var(--line);">
+              <button class="btn btn-ghost" style="width:auto;padding:6px 12px;" type="submit">💾</button>
+            </form>
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+{% endif %}
+{% endblock %}

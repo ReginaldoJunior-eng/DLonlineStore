@@ -1,0 +1,82 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="icon" type="image/png" href="{% static 'core/logo.png' %}">
+<title>D.L Online Store — Entrar</title>
+<style>
+  :root {
+    --paper: #f1f3ee; --text: #16231d; --text-dim: #5b6a61;
+    --line: rgba(22,35,29,.12); --azul: #0a66c2; --azul-profundo: #08306b;
+    --danger: #b23b32; --danger-bg: #f6dfdc;
+    --shadow: 0 1px 2px rgba(22,35,29,.06), 0 8px 24px rgba(22,35,29,.05);
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh; background: var(--paper); color: var(--text);
+    font-family: -apple-system, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+    display: flex; align-items: center; justify-content: center;
+    -webkit-font-smoothing: antialiased;
+  }
+  .login-card {
+    background: #ffffff; border: 1px solid var(--line); border-radius: 16px;
+    box-shadow: var(--shadow); padding: 40px 36px; width: 100%; max-width: 380px;
+  }
+  .login-card img { width: 100%; max-width: 220px; height: auto; display: block; margin: 0 auto 28px; }
+  .login-card input {
+    width: 100%; padding: 11px 13px; margin-bottom: 12px; border-radius: 8px;
+    border: 1px solid var(--line); background: #ffffff; color: var(--text); font-size: 14px; font-family: inherit;
+  }
+  .login-card input::placeholder { color: var(--text-dim); }
+  .btn-entrar {
+    width: 100%; border: none; border-radius: 8px; padding: 12px 15px; margin-top: 4px;
+    font-size: 14px; font-weight: 700; cursor: pointer; font-family: inherit;
+    background: var(--azul); color: #f0f6ff;
+  }
+  .btn-entrar:hover { filter: brightness(1.06); }
+  .msg-error { background: var(--danger-bg); color: var(--danger); padding: 10px 14px; border-radius: 8px; font-size: 13px; margin-bottom: 14px; }
+  .login-foot { text-align: center; font-size: 10.5px; color: var(--text-dim); margin-top: 22px; }
+
+  #janela-controles {
+    position: fixed; top: 6px; right: 6px; z-index: 9999; display: none;
+    gap: 2px; background: #ffffff; border: 1px solid var(--line);
+    border-radius: 7px; padding: 2px;
+  }
+  #janela-controles button {
+    width: 24px; height: 20px; border: none; border-radius: 5px; background: transparent;
+    color: var(--text-dim); font-size: 11px; cursor: pointer; font-family: inherit;
+    display: flex; align-items: center; justify-content: center;
+  }
+  #janela-controles button:hover { background: rgba(10,102,194,.12); color: var(--azul); }
+  #janela-controles button.btn-fechar-janela:hover { background: var(--danger-bg); color: var(--danger); }
+</style>
+</head>
+<body>
+<div id="janela-controles">
+  <button type="button" onclick="window.pywebview.api.minimizar()" title="Minimizar">─</button>
+  <button type="button" class="btn-fechar-janela" onclick="window.pywebview.api.fechar()" title="Fechar">✕</button>
+</div>
+<script>
+  window.addEventListener('pywebviewready', function() {
+    document.getElementById('janela-controles').style.display = 'flex';
+  });
+</script>
+  <div class="login-card">
+    <img src="{% static 'core/logo.png' %}" alt="D.L Online Store">
+    {% if messages %}
+      {% for message in messages %}
+        <div class="msg-error">{{ message }}</div>
+      {% endfor %}
+    {% endif %}
+    <form method="post" action="{% url 'core:entrar' %}">
+      {% csrf_token %}
+      <input type="text" name="usuario" placeholder="Usuário" autocomplete="username" autofocus>
+      <input type="password" name="senha" placeholder="Senha" autocomplete="current-password">
+      <button class="btn-entrar" type="submit">Entrar</button>
+    </form>
+    <div class="login-foot">Desenvolvido por DataStream BI</div>
+  </div>
+</body>
+</html>

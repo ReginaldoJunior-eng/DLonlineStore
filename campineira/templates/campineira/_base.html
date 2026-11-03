@@ -1,0 +1,21 @@
+{% extends "core/base.html" %}
+{% block extra_head %}
+<style>
+  .subnav { display: flex; gap: 4px; border-bottom: 1px solid var(--line); margin-bottom: 20px; }
+  .subnav a {
+    padding: 8px 14px; font-size: 13px; font-weight: 600; color: var(--text-dim);
+    text-decoration: none; border-bottom: 2px solid transparent; border-radius: 6px 6px 0 0;
+  }
+  .subnav a:hover { background: var(--paper); }
+  .subnav a.active { color: var(--azul-profundo); border-bottom-color: var(--azul); background: rgba(10,102,194,.08); }
+</style>
+{% endblock %}
+{% block content %}
+<h1>🏭 Campineira — Varredura de Produtos</h1>
+<div class="subnav">
+  {% for slug, label, urlname in abas %}
+    <a class="{% if aba_atual == slug %}active{% endif %}" href="{% url urlname %}">{{ label }}</a>
+  {% endfor %}
+</div>
+{% block campineira_content %}{% endblock %}
+{% endblock %}

@@ -1,0 +1,46 @@
+{% extends "core/base.html" %}
+{% load l10n %}
+{% block title %}Comparativo de Preços{% endblock %}
+{% block content %}
+<h1>📊 Comparativo de Preços</h1>
+{% if not tem_produtos %}
+  <div class="card" style="color:var(--text-dim);">Nenhum produto cadastrado ainda.</div>
+{% else %}
+  <form method="get" style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px;">
+    <input type="text" name="produto" list="produtos-datalist" value="{{ prod_sel }}" placeholder="Pesquisar produto..."
+           style="padding:9px 10px;border-radius:7px;border:1px solid var(--line);min-width:260px;">
+    <datalist id="produtos-datalist">
+      {% for p in produtos %}<option value="{{ p }}">{% endfor %}
+    </datalist>
+    <input type="text" name="sku" list="skus-datalist" value="{{ sku_sel }}" placeholder="Pesquisar por SKU..."
+           style="padding:9px 10px;border-radius:7px;border:1px solid var(--line);min-width:180px;">
+    <datalist id="skus-datalist">
+      {% for s in skus %}<option value="{{ s }}">{% endfor %}
+    </datalist>
+    <input type="number" name="margem" value="{{ margem|unlocalize }}" step="any" style="width:140px;padding:9px 10px;border-radius:7px;border:1px solid var(--line);" placeholder="Margem %">
+    <button class="btn btn-primary" type="submit" style="width:auto;padding:9px 16px;">Calcular</button>
+  </form>
+  {% if nao_encontrado %}
+    <p style="color:var(--danger);font-size:12.5px;margin:-8px 0 16px;">Nenhum produto/SKU encontrado parecido com "{{ nao_encontrado }}".</p>
+  {% endif %}
+
+  {% if selecionado %}
+    <div class="card" style="background:var(--success-bg);border:none;margin-bottom:16px;">
+      <b>✓ Selecionado:</b> {{ selecionado.produto }} <code>{{ selecionado.sku }}</code>
+    </div>
+    <div class="metric-row">
+      <div class="card"><div class="lbl">💰 Custo Base</div><div class="val num">R$ {{ selecionado.custo|floatformat:2 }}</div></div>
+    </div>
+    <div class="table-wrap">
+      <table class="tbl">
+        <thead><tr><th>Canal</th><th>Preço Sugerido</th><th>Lucro Líquido</th></tr></thead>
+        <tbody>
+        {% for r in resultado %}
+          <tr><td>{{ r.canal }}</td><td class="num">R$ {{ r.preco|floatformat:2 }}</td><td class="num">R$ {{ r.lucro|floatformat:2 }}</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% endif %}
+{% endif %}
+{% endblock %}

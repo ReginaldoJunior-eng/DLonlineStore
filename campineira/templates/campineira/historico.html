@@ -1,0 +1,70 @@
+{% extends "campineira/_base.html" %}
+{% block title %}Histórico — Campineira{% endblock %}
+{% block campineira_content %}
+<h3>🗂️ Histórico de Produtos da Campineira</h3>
+<p style="color:var(--text-dim);font-size:12.5px;">
+  Diferente da aba <b>Resultados</b> (que mostra só a última varredura), este é um registro
+  permanente — nunca é sobrescrito. O SKU fica gravado assim que o produto é publicado no
+  Armazém e permanece ali de varredura em varredura.
+</p>
+
+{% if erro %}
+  <div class="msg msg-error">Erro ao consultar o histórico: {{ erro }}</div>
+{% elif vazio %}
+  <div class="card" style="color:var(--text-dim);">Histórico ainda vazio — rode uma varredura em ⚙️ Configurar e Rodar pra começar a popular.</div>
+{% else %}
+  <div class="metric-row">
+    <div class="card"><div class="lbl">📦 Total no histórico</div><div class="val num">{{ total }}</div></div>
+    <div class="card"><div class="lbl">✅ Já publicados</div><div class="val num">{{ publicados }}</div></div>
+    <div class="card"><div class="lbl">⏳ Aguardando publicação</div><div class="val num">{{ aguardando }}</div></div>
+  </div>
+
+  <form method="get" class="filtros-row">
+    <select name="categoria" onchange="this.form.submit()">
+      {% for c in cats_hist %}<option value="{{ c }}" {% if c == cat_sel %}selected{% endif %}>{{ c }}</option>{% endfor %}
+    </select>
+    <input type="text" name="busca" placeholder="Buscar por nome ou SKU" value="{{ busca }}">
+    <select name="status" onchange="this.form.submit()">
+      <option value="Todos" {% if status_sel == "Todos" %}selected{% endif %}>Todos</option>
+      <option value="Publicados" {% if status_sel == "Publicados" %}selected{% endif %}>✅ Publicados</option>
+      <option value="Não publicados" {% if status_sel == "Não publicados" %}selected{% endif %}>⏳ Não publicados</option>
+    </select>
+    <button class="btn btn-ghost" type="submit" style="width:auto;padding:8px 14px;">Filtrar</button>
+  </form>
+
+  <p style="color:var(--text-dim);font-size:12.5px;">
+    <b>{{ total_filtrado }}</b> produto(s) — ordenado pela leitura mais recente
+    {% if truncado %}<span> (mostrando os 200 primeiros)</span>{% endif %}
+  </p>
+
+  <div class="table-wrap">
+    <table class="tbl">
+      <thead>
+        <tr><th>Foto</th><th>Nome</th><th>Categoria</th><th>Estoque</th><th>Custo</th>
+            <th>Shein</th><th>Shopee</th><th>Temu</th><th>TikTok</th><th>SKU</th>
+            <th>1ª Leitura</th><th>Última Leitura</th></tr>
+      </thead>
+      <tbody>
+        {% for p in linhas %}
+          <tr>
+            <td>{% if p.foto %}<img class="thumb" src="{{ p.foto }}" alt="">{% endif %}</td>
+            <td style="max-width:240px;">{{ p.nome }}</td>
+            <td>{{ p.categoria }}</td>
+            <td class="num">{{ p.estoque }}</td>
+            <td class="num">{{ p.custo }}</td>
+            <td class="num">R$ {{ p.shein|default:0|floatformat:2 }}</td>
+            <td class="num">R$ {{ p.shopee|default:0|floatformat:2 }}</td>
+            <td class="num">R$ {{ p.temu|default:0|floatformat:2 }}</td>
+            <td class="num">R$ {{ p.tiktok|default:0|floatformat:2 }}</td>
+            <td class="num">
+              {% if p.sku %}<span class="chip chip-ok">{{ p.sku }}</span>{% else %}<span class="chip chip-wait">Aguardando</span>{% endif %}
+            </td>
+            <td class="num" style="white-space:nowrap;">{{ p.primeira_leitura|date:"d/m/Y H:i" }}</td>
+            <td class="num" style="white-space:nowrap;">{{ p.ultima_leitura|date:"d/m/Y H:i" }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+{% endif %}
+{% endblock %}
