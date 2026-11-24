@@ -56,6 +56,13 @@
   .btn-logout { background: transparent; color: var(--danger); border: 1px solid rgba(178,59,50,.3); width: 100%; }
   .btn-ghost { background: var(--paper-raised); color: var(--azul-profundo); border: 1px solid var(--line); }
   .btn-ghost:hover { background: rgba(10,102,194,.08); border-color: rgba(10,102,194,.3); }
+  .btn[disabled] { opacity: .65; cursor: not-allowed; }
+  .btn .spinner {
+    display: inline-block; width: 12px; height: 12px; margin-right: 6px; vertical-align: -2px;
+    border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%;
+    animation: girar-spinner .6s linear infinite; opacity: .85;
+  }
+  @keyframes girar-spinner { to { transform: rotate(360deg); } }
 
   .sidebar-foot { margin-top: auto; text-align: center; font-size: 10.5px; color: var(--text-dim); }
 
@@ -128,6 +135,20 @@
   window.addEventListener('pywebviewready', function() {
     document.getElementById('janela-controles').style.display = 'flex';
   });
+
+  // Feedback de "carregando" em QUALQUER botão de formulário do app — sem
+  // isso, telas que dependem do Chrome/Selenium (Login Upseller, Campineira
+  // etc.) ficam paradas sem nenhum sinal enquanto processam. A janela é sem
+  // moldura (pywebview), então nem a barrinha de carregamento do navegador
+  // aparece pra dar esse feedback sozinha.
+  document.addEventListener('submit', function(ev) {
+    var form = ev.target;
+    if (!(form instanceof HTMLFormElement)) return;
+    var btn = ev.submitter || form.querySelector('button[type="submit"]');
+    if (!btn || btn.disabled) return;
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner"></span>Processando...';
+  });
 </script>
 <div class="shell">
   <aside class="sidebar">
@@ -159,7 +180,7 @@
       <button class="btn btn-logout" type="submit">🚪 Sair</button>
     </form>
 
-    <div class="sidebar-foot">Desenvolvido por DataStream BI</div>
+    <div class="sidebar-foot">Desenvolvido por DataStream BI{% if app_version %} · v{{ app_version }}{% endif %}</div>
   </aside>
 
   <main>

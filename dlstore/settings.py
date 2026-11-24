@@ -80,6 +80,7 @@ TEMPLATES = [
                 'django.contrib.auth.context_processors.auth',
                 'django.contrib.messages.context_processors.messages',
                 'upseller.context_processors.upseller_status',
+                'core.context_processors.versao_app',
             ],
         },
     },
