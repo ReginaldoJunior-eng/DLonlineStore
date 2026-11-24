@@ -20,12 +20,15 @@ Diferenças de propósito em relação ao original:
 """
 import base64
 import io
+import logging
 import os
 import time
 
 from django.conf import settings
 
 from .state import ESTADO
+
+logger = logging.getLogger(__name__)
 
 TABLE_SESSAO_UPSELLER = "leandro-marketplace.DL_Store_Online.tb_upseller_sessao"
 
@@ -108,11 +111,23 @@ def deletar_cookies(client):
 
 # ── DRIVER ────────────────────────────────────────────────────────────────
 
-def criar_driver(pasta_download=None):
+def _limpar_cache_chromedriver():
+    """Apaga o cache do webdriver_manager (~/.wdm). Usado quando o Chrome
+    crasha ao abrir — normalmente o Chrome atualizou sozinho e o chromedriver
+    baixado antes ficou desalinhado; forçar um download novo resolve."""
+    import shutil
+    shutil.rmtree(os.path.join(os.path.expanduser("~"), ".wdm"), ignore_errors=True)
+
+
+def _abrir_chrome(opts):
     from selenium import webdriver
     from selenium.webdriver.chrome.service import Service
-    from selenium.webdriver.chrome.options import Options
     from webdriver_manager.chrome import ChromeDriverManager
+    return webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=opts)
+
+
+def criar_driver(pasta_download=None):
+    from selenium.webdriver.chrome.options import Options
 
     opts = Options()
     # Nem headless nem fora da tela de propósito — comparado com
@@ -138,7 +153,12 @@ def criar_driver(pasta_download=None):
             "download.directory_upgrade": True,
             "safebrowsing.enabled": True,
         })
-    driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=opts)
+    try:
+        driver = _abrir_chrome(opts)
+    except Exception:
+        logger.exception("Chrome crashou ao abrir — limpando cache do chromedriver e tentando de novo")
+        _limpar_cache_chromedriver()
+        driver = _abrir_chrome(opts)
     if pasta_download:
         try:
             driver.execute_cdp_cmd("Page.setDownloadBehavior", {
